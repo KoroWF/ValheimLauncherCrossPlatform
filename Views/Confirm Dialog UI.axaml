@@ -1,0 +1,15 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ValheimCrossPlatformLauncher.ConfirmDialog"
+        SizeToContent="WidthAndHeight"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="Bestätigung">
+  <StackPanel Margin="20" Spacing="10">
+    <TextBlock Name="MessageBlock" TextWrapping="Wrap" MinWidth="250" MaxWidth="400" />
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,15,0,0" Spacing="10">
+      <Button Content="Ja" Name="YesButton" IsDefault="True" />
+      <Button Content="Nein" Name="NoButton" IsCancel="True" />
+    </StackPanel>
+  </StackPanel>
+</Window>
