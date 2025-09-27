@@ -9,9 +9,7 @@ namespace ValheimCrossPlatformLauncher
         public MessageBox()
         {
             InitializeComponent();
-#if DEBUG
-            this.AttachDevTools();
-#endif
+
         }
 
         public static async void Show(Window parent, string message)

@@ -32,6 +32,10 @@
     <Style Selector="Button#InstallButton:pointerover /template/ Image#BackgroundImage">
       <Setter Property="Source" Value="avares://ValheimLauncherCrossPlatform/Assets/pic/installgamehover1.png"/>
     </Style>
+    <Style Selector="Button#InstallButton:disabled /template/ Image#BackgroundImage">
+      <Setter Property="Source" Value="avares://ValheimLauncherCrossPlatform/Assets/pic/installgame1noenable.png"/>
+      <Setter Property="Opacity" Value="0.7"/>
+    </Style>
     <Style Selector="Button#FixButton">
       <Setter Property="Template">
         <ControlTemplate>
@@ -42,12 +46,17 @@
     <Style Selector="Button#FixButton:pointerover /template/ Image#BackgroundImage">
       <Setter Property="Source" Value="avares://ValheimLauncherCrossPlatform/Assets/pic/fixvalheimover.png"/>
     </Style>
+    <Style Selector="Button#FixButton:disabled /template/ Image#BackgroundImage">
+      <Setter Property="Source" Value=""/>
+      <Setter Property="Opacity" Value="0.7"/>
+    </Style>
     <Style Selector="Button#ModUpdateButton">
       <Setter Property="Template">
         <ControlTemplate>
           <Image Name="BackgroundImage" Source="avares://ValheimLauncherCrossPlatform/Assets/pic/MPDownload.png" Stretch="Uniform"/>
         </ControlTemplate>
       </Setter>
+      
     </Style>
     <Style Selector="Button#ModUpdateButton:pointerover /template/ Image#BackgroundImage">
       <Setter Property="Source" Value="avares://ValheimLauncherCrossPlatform/Assets/pic/MPDownloadOver.png"/>
@@ -90,6 +99,26 @@
     </Style>
     <Style Selector="ToggleSwitch.NoText /template/ Border#SwitchKnobOff">
     </Style>
+
+    <Style Selector="ProgressBar">
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Name="PART_Track"
+                  Background="Transparent"
+                  ClipToBounds="True">
+
+            <Border Name="PART_Indicator"
+                    HorizontalAlignment="Left"
+                    Background="Transparent">
+
+              <Image Source="avares://ValheimLauncherCrossPlatform/Assets/pic/leiste.png"
+                     Stretch="UniformToFill" />
+            </Border>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+
   </UserControl.Styles>
 
 
@@ -118,23 +147,26 @@
             IsEnabled="{Binding IsFixValheimEnabled}"
             IsVisible="{Binding IsFixValheimEnabled}"
             Command="{Binding FixValheimCommand}"/>
-    <Button x:Name="ModUpdateButton"
-            HorizontalAlignment="Left" VerticalAlignment="Top"
-            Margin="285,603,0,0" Width="100" Height="28"
-            Command="{Binding ManualModUpdateCommand}"
-            IsEnabled="{Binding IsMPDownloadEnabled}"/>
 
-    <StackPanel HorizontalAlignment="Left" Margin="495,585,0,0" VerticalAlignment="Top"
+    <StackPanel HorizontalAlignment="Left" Margin="306,592,0,0" VerticalAlignment="Top"
                 IsVisible="{Binding IsResetVisible}"
                 Orientation="Horizontal" Spacing="5">
+      <Button x:Name="ModUpdateButton"
+        HorizontalAlignment="Left" VerticalAlignment="Top"
+        Width="60" Height="50" Margin="0,0,100,0"
+        Command="{Binding ManualModUpdateCommand}"
+        IsEnabled="{Binding IsMPDownloadEnabled}"/>
+
       <Button x:Name="ChangePathButton"
-              Width="50" Height="50"
+              Width="40" Height="40"
               Content="Pfad ändern"
               Command="{Binding ChangeInstallPathCommand}" />
+      <Label Content="Reinstall" Margin="-12,0,5,0" Foreground="#FFBFBFBF" FontFamily="/Assets/fonts/Norse.otf#Norse" VerticalAlignment="Center"/>
       <Button x:Name="OpenPathButton"
-              Width="50" Height="50"
+              Width="40" Height="40"
               Content="Pfad öffnen"
               Command="{Binding OpenInstallPathCommand}" />
+      <Label Content="Inst.pfad Öffnen" Margin="-12,0,5,0" Foreground="#FFBFBFBF" FontFamily="/Assets/fonts/Norse.otf#Norse" VerticalAlignment="Center"/>
     </StackPanel>
 
     <ProgressBar HorizontalAlignment="Left" VerticalAlignment="Top"
@@ -156,8 +188,8 @@
         <Label Content="{Binding OnlineModpackVersion}" Width="68" Height="24" Foreground="#FFBFBFBF" FontFamily="/Assets/fonts/Norse.otf#Norse" />
       </StackPanel>
     </StackPanel>
-    <Label Content="Installationspfad:" HorizontalAlignment="Left" Margin="500,570,0,0" VerticalAlignment="Top" Foreground="#FFBFBFBF" FontFamily="/Assets/fonts/Norse.otf#Norse" />
-    <Label Content="{Binding InstallPathText}" HorizontalAlignment="Left" Margin="590,570,0,0" VerticalAlignment="Top" Width="100" Height="24" Foreground="#FFBFBFBF" FontFamily="/Assets/fonts/Norse.otf#Norse" />
+    <Label Content="Installationspfad:" HorizontalAlignment="Left" Margin="480,570,0,0" VerticalAlignment="Top" Foreground="#FFBFBFBF" FontFamily="/Assets/fonts/Norse.otf#Norse" />
+    <Label Content="{Binding InstallPathText}" HorizontalAlignment="Left" Margin="570,570,0,0" VerticalAlignment="Top" Width="120" Height="24" Foreground="#FFBFBFBF" FontFamily="/Assets/fonts/Norse.otf#Norse" />
 
     <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" Margin="205,450,0,0" Orientation="Horizontal">
       <Label Content="DirectX 11" VerticalAlignment="Center" Foreground="White" FontFamily="/Assets/fonts/Norse.otf#Norse"/>

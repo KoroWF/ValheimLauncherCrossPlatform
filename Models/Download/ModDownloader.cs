@@ -39,7 +39,6 @@ namespace ValheimLauncher2.Models.Download
                 return (null, false);
             }
 
-            _settings.Modpack.ExpectedModFiles = new List<string>(apiData.dependencies ?? Array.Empty<string>());
             string localVersion = _settings.Modpack.CurrentLocalVersion;
             bool needsUpdate = localVersion != apiData.versionNumber;
 
@@ -51,21 +50,27 @@ namespace ValheimLauncher2.Models.Download
         {
             _updateStatus("Starte Mod-Update...");
             var apiData = await GetThunderstoreApiData("ImmernDarNew/ImmernDarNew_Modpack");
-            if (apiData.downloadUrl == null || apiData.dependencies == null)
+            if (apiData.dependencies == null)
             {
-                _updateStatus("Fehler: Konnte Modpack-Daten nicht abrufen.");
+                _updateStatus("Fehler: Konnte Modpack-Abhängigkeiten nicht abrufen.");
                 return;
             }
 
             _settings.Modpack.ExpectedModFiles = new List<string>(apiData.dependencies);
+            string pluginsPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "plugins");
 
-            string bepinexPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx");
-            await CleanOldModsAsync(bepinexPath, _settings.Modpack.ExpectedModFiles);
+            string extraModsPath = Path.Combine(pluginsPath, "1ExtraMods");
+            Directory.CreateDirectory(extraModsPath); // Erstellt den Ordner nur, wenn er fehlt
 
-            bool success = await DownloadAndExtractModpackAsync(apiData.downloadUrl, bepinexPath);
+
+            await CleanupOldModsAsync(pluginsPath, apiData.dependencies.ToList());
+
+            bool success = await DownloadAndExtractDependenciesAsync(apiData.dependencies);
 
             if (success)
             {
+                await InstallBepInExCoreAsync();
+
                 _settings.Modpack.CurrentLocalVersion = apiData.versionNumber;
                 _saveSettings();
                 _updateStatus("Modpack erfolgreich aktualisiert!");
@@ -76,140 +81,169 @@ namespace ValheimLauncher2.Models.Download
             }
         }
 
-        private async Task<bool> DownloadAndExtractModpackAsync(string downloadUrl, string extractPath)
+        private async Task<bool> DownloadAndExtractDependenciesAsync(string[] dependencies)
         {
-            try
-            {
-                _updateStatus("Lade Modpack herunter...");
-                _updateProgress("0");
-                string tempZipPath = Path.Combine(Path.GetTempPath(), "modpack.zip"); // Use a consistent temp name
+            string baseDirectory = _settings.ValheimInstallPath;
+            string bepinexPath = Path.Combine(baseDirectory, "BepInEx");
+            string pluginsPath = Path.Combine(bepinexPath, "plugins");
+            // Pfad zum persistenten Cache-Ordner definieren
+            string pluginZipPath = Path.Combine(bepinexPath, "pluginZip");
 
-                // --- Start Caching Logic ---
-                long onlineFileSize = -1;
+            Directory.CreateDirectory(pluginsPath);
+            Directory.CreateDirectory(pluginZipPath);
+
+            bool allOperationsSuccessful = true;
+            int totalDependencies = dependencies.Length;
+            int completedDependencies = 0;
+
+            foreach (var dependency in dependencies)
+            {
+                completedDependencies++;
+                double percentage = (double)completedDependencies / totalDependencies * 100;
+                _updateProgress(percentage.ToString("F0", CultureInfo.InvariantCulture));
+
+                _updateStatus($"Verarbeite: {dependency}");
+                bool isBepInExPack = dependency.Contains("denikson-BepInExPack_Valheim", StringComparison.OrdinalIgnoreCase);
+
                 try
                 {
-                    using var headRequest = new HttpRequestMessage(HttpMethod.Head, downloadUrl);
-                    using var headResponse = await _httpClient.SendAsync(headRequest);
-                    headResponse.EnsureSuccessStatusCode();
-                    onlineFileSize = headResponse.Content.Headers.ContentLength ?? -1;
+                    // --- START CACHING LOGIC ---
+                    string cachedZipPath = Path.Combine(pluginZipPath, $"{dependency}.zip");
+                    string downloadUrl = $"https://gcdn.thunderstore.io/live/repository/packages/{dependency}.zip";
+                    bool downloadNeeded = true;
+
+                    // HEAD-Request, um die Online-Dateigröße zu bekommen
+                    long onlineFileSize = -1;
+                    try
+                    {
+                        using var headRequest = new HttpRequestMessage(HttpMethod.Head, downloadUrl);
+                        using var headResponse = await _httpClient.SendAsync(headRequest);
+                        headResponse.EnsureSuccessStatusCode();
+                        onlineFileSize = headResponse.Content.Headers.ContentLength ?? -1;
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Konnte Online-Dateigröße für {dependency} nicht abrufen: {ex.Message}");
+                    }
+
+                    // Vergleiche lokale Dateigröße mit Online-Größe
+                    if (File.Exists(cachedZipPath) && onlineFileSize > 0)
+                    {
+                        var localFileInfo = new FileInfo(cachedZipPath);
+                        if (localFileInfo.Length == onlineFileSize)
+                        {
+                            _updateStatus($"Verwende Cache für: {dependency}");
+                            downloadNeeded = false;
+                        }
+                    }
+
+                    // Download nur, wenn nötig
+                    if (downloadNeeded)
+                    {
+                        _updateStatus($"Lade herunter: {dependency}");
+                        using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
+                        {
+                            response.EnsureSuccessStatusCode();
+                            using (var fileStream = new FileStream(cachedZipPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                            {
+                                await response.Content.CopyToAsync(fileStream);
+                            }
+                        }
+                    }
+                    // --- END CACHING LOGIC ---
+
+                    // Entpacken aus der (jetzt gecachten) ZIP-Datei
+                    string extractPath = isBepInExPack ? baseDirectory : Path.Combine(pluginsPath, dependency);
+                    Directory.CreateDirectory(extractPath);
+                    using (var archive = ArchiveFactory.Open(cachedZipPath))
+                    {
+                        // Wir gehen jede Datei im Archiv einzeln durch
+                        foreach (var entry in archive.Entries)
+                        {
+                            // Wir überspringen alle Dateien, die auf .yaml enden (Groß/Kleinschreibung egal)
+                            // und auch reine Verzeichnis-Einträge.
+                            if (!entry.IsDirectory && !entry.Key.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase))
+                            {
+                                // Nur die erlaubten Dateien werden entpackt.
+                                entry.WriteToDirectory(extractPath, new ExtractionOptions { ExtractFullPath = true, Overwrite = true });
+                            }
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Could not get online file size: {ex.Message}");
+                    _updateStatus($"Fehler bei {dependency}: {ex.Message}");
+                    Debug.WriteLine(ex);
+                    allOperationsSuccessful = false;
                 }
-
-                if (File.Exists(tempZipPath) && onlineFileSize > 0)
-                {
-                    var localFileInfo = new FileInfo(tempZipPath);
-                    if (localFileInfo.Length == onlineFileSize)
-                    {
-                        _updateStatus("Verwende zwischengespeichertes Modpack.");
-                        _updateProgress("100");
-                        // Skip download, proceed to extraction
-                    }
-                    else
-                    {
-                        await DownloadFile(downloadUrl, tempZipPath);
-                    }
-                }
-                else
-                {
-                    await DownloadFile(downloadUrl, tempZipPath);
-                }
-                // --- End Caching Logic ---
-
-
-                _updateStatus("Entpacke Mods...");
-                _updateProgress("0"); // Reset for extraction progress if needed, simple for now
-                using (var archive = ArchiveFactory.Open(tempZipPath))
-                {
-                    archive.WriteToDirectory(extractPath, new ExtractionOptions { ExtractFullPath = true, Overwrite = true });
-                }
-
-                // We keep the zip for caching, so we don't delete it.
-                // File.Delete(tempZipPath); 
-
-                return true;
             }
-            catch (Exception ex)
-            {
-                _updateStatus($"Fehler beim Mod-Download: {ex.Message}");
-                Debug.WriteLine(ex);
-                return false;
-            }
+
+            return allOperationsSuccessful;
         }
 
-        private async Task DownloadFile(string url, string destinationPath)
-        {
-            using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
-            response.EnsureSuccessStatusCode();
-            var totalBytes = response.Content.Headers.ContentLength ?? -1L;
-            var readBytes = 0L;
+        // --- Die restlichen Methoden bleiben unverändert ---
 
-            using (var contentStream = await response.Content.ReadAsStreamAsync())
-            using (var fileStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true))
-            {
-                var buffer = new byte[8192];
-                int bytesRead;
-                while ((bytesRead = await contentStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
-                {
-                    await fileStream.WriteAsync(buffer, 0, bytesRead);
-                    readBytes += bytesRead;
-                    if (totalBytes > 0)
-                    {
-                        double percentage = (double)readBytes / totalBytes * 100;
-                        _updateProgress(percentage.ToString("F0", CultureInfo.InvariantCulture));
-                    }
-                }
-            }
-        }
-
-        private async Task CleanOldModsAsync(string bepinexPath, List<string> expectedMods)
+        private async Task CleanupOldModsAsync(string pluginsPath, List<string> expectedDependencies)
         {
-            _updateStatus("Bereinige alte Mod-Dateien...");
+            _updateStatus("Bereinige alte Mod-Ordner...");
             await Task.Run(() =>
             {
-                string pluginsPath = Path.Combine(bepinexPath, "plugins");
                 if (!Directory.Exists(pluginsPath)) return;
-
-                // Create a set of expected folder/file names for easy lookup
-                var modsToKeep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var mod in expectedMods)
+                var foldersToKeep = new HashSet<string>(expectedDependencies, StringComparer.OrdinalIgnoreCase);
+                foldersToKeep.Add("1ExtraMods");
+                foldersToKeep.Add("MMHOOK");
+                foldersToKeep.Add("HappyDragoon-DragoonCapes");
+            foreach (var dirPath in Directory.GetDirectories(pluginsPath))
                 {
-                    // Basic conversion from "Author-Mod-Version" to "Author-Mod"
-                    int lastDash = mod.LastIndexOf('-');
-                    if (lastDash > 0)
-                    {
-                        // This is a guess; Thunderstore package names can differ from DLL names.
-                        // A more robust system would map package names to actual files.
-                        // For now, we clean very selectively.
-                    }
-                }
-
-                // --- SAFER CLEANUP ---
-                // Instead of deleting everything, we only delete folders that look like old versions of what we are about to install.
-                // The old launcher's logic was very specific. A simpler, safer approach for now:
-                // Let the extraction process overwrite files. A dedicated "clean install" button
-                // could perform a more aggressive cleanup if needed.
-
-                // For now, we will only delete patchers and core to ensure BepInEx updates correctly.
-                var foldersToClean = new[] { "patchers", "core" };
-                foreach (var folder in foldersToClean)
-                {
-                    var fullPath = Path.Combine(bepinexPath, folder);
-                    if (Directory.Exists(fullPath))
+                    var dirName = new DirectoryInfo(dirPath).Name;
+                    if (!foldersToKeep.Contains(dirName))
                     {
                         try
                         {
-                            Directory.Delete(fullPath, true);
+                            _updateStatus($"Lösche alten Mod-Ordner: {dirName}");
+                            Directory.Delete(dirPath, true);
                         }
                         catch (Exception ex)
                         {
-                            Debug.WriteLine($"Could not delete old mod folder {fullPath}: {ex.Message}");
+                            Debug.WriteLine($"Konnte alten Mod-Ordner nicht löschen {dirName}: {ex.Message}");
                         }
                     }
                 }
             });
+        }
+
+        private async Task InstallBepInExCoreAsync()
+        {
+            _updateStatus("Installiere BepInEx Kernkomponenten...");
+            string baseDirectory = _settings.ValheimInstallPath;
+            string sourceFolderPath = Path.Combine(baseDirectory, "BepInExPack_Valheim");
+
+            if (Directory.Exists(sourceFolderPath))
+            {
+                try
+                {
+                    MergeDirectory(sourceFolderPath, baseDirectory);
+                    Directory.Delete(sourceFolderPath, true);
+                    _updateStatus("BepInEx Kernkomponenten erfolgreich installiert.");
+                }
+                catch (Exception ex)
+                {
+                    _updateStatus($"Fehler bei BepInEx-Installation: {ex.Message}");
+                    Debug.WriteLine(ex);
+                }
+            }
+            await Task.CompletedTask;
+        }
+
+        private void MergeDirectory(string sourceDir, string targetDir)
+        {
+            Directory.CreateDirectory(targetDir);
+            foreach (var file in Directory.GetFiles(sourceDir, "*.*", SearchOption.AllDirectories))
+            {
+                string targetFile = Path.Combine(targetDir, file.Substring(sourceDir.Length + 1));
+                Directory.CreateDirectory(Path.GetDirectoryName(targetFile));
+                File.Move(file, targetFile, true);
+            }
         }
 
         private async Task<(string? downloadUrl, string? versionNumber, string[]? dependencies)> GetThunderstoreApiData(string modpackId)

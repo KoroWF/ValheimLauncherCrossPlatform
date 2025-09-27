@@ -3,12 +3,13 @@ using HtmlAgilityPack;
 using SharpCompress.Archives;
 using SharpCompress.Common;
 using System;
-using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
-using ValheimLauncher2.Models.PerformanceGame; // Import the new namespace
+using ValheimLauncher2.Models.PerformanceGame;
 
 namespace ValheimLauncher2.Models.Download
 {
@@ -17,6 +18,7 @@ namespace ValheimLauncher2.Models.Download
         private static readonly HttpClient _httpClient = new HttpClient();
         private readonly Action<string> _updateStatusAction;
         private readonly Action<double> _updateProgressAction;
+        private long _totalBytesDownloaded;
 
         public ClientDownloader(Action<string> updateStatus, Action<double> updateProgress)
         {
@@ -28,17 +30,14 @@ namespace ValheimLauncher2.Models.Download
         {
             try
             {
-                // This is where the entire logic from InstallGame_Click and the called methods will go.
-                // UI-specific actions (changing visibility) will remain in the ViewModel!
                 _updateStatusAction("Installiere das Hauptspiel...");
                 await installer(installPath);
                 _updateStatusAction("Das Hauptspiel wurde fertig geladen.");
-
             }
             catch (Exception ex)
             {
+                Debug.WriteLine($"FATALER FEHLER in InstallGameAsync: {ex}");
                 _updateStatusAction($"Fehler bei der Installation: {ex.Message}");
-
             }
         }
 
@@ -47,15 +46,13 @@ namespace ValheimLauncher2.Models.Download
             try
             {
                 _updateStatusAction("Überprüfe vorhandene Daten auf Fehler!");
-                // The logic for the repair (GameInstallProgress) will be moved here.
-                // Since I don't have the code for GameInstallProgress, here is a placeholder.
-                // It now calls deleteFolder and then installer.
                 await deleteFolder(installPath);
                 await installer(installPath);
                 _updateStatusAction("Überprüfung beendet, bereit zum Starten!");
             }
             catch (Exception ex)
             {
+                Debug.WriteLine($"FATALER FEHLER in FixValheimAsync: {ex}");
                 _updateStatusAction($"Fehler bei der Reparatur: {ex.Message}");
             }
         }
@@ -68,35 +65,43 @@ namespace ValheimLauncher2.Models.Download
                 string fullPath = Path.Combine(baseDirectory, path);
                 if (Directory.Exists(fullPath))
                 {
-                    try
-                    {
-                        Directory.Delete(fullPath, recursive: true);
-                    }
-                    catch (Exception ex)
-                    {
-                        // Error handling
-                        throw new IOException($"Fehler beim Löschen von {fullPath}", ex);
-                    }
+                    try { Directory.Delete(fullPath, recursive: true); }
+                    catch (Exception ex) { throw new IOException($"Fehler beim Löschen von {fullPath}", ex); }
                 }
             }
         }
 
         public async Task installer(string installPath)
         {
-            string serverUri = "https://www.immerndar.de/ValheimWithBepInEx/";
-            _updateStatusAction("Lade Spieldateien herunter...");
+            string serverUri = string.Empty;
 
-            // Update UI here via callback
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                 serverUri = "https://www.immerndar.de/ValheimWithBepInEx/Windows/";
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                serverUri = "https://www.immerndar.de/ValheimWithBepInEx/Linux/";
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                 serverUri = "https://www.immerndar.de/ValheimWithBepInEx/Mac/";
+            }
+
+            if(string.IsNullOrEmpty(serverUri))
+            {
+                _updateStatusAction("Fehler: Unbekanntes Betriebssystem.");
+                return;
+            }
+
+            _updateStatusAction("Lade Spieldateien herunter...");
             Dispatcher.UIThread.Invoke(() => _updateProgressAction(0.0));
+            _totalBytesDownloaded = 0L;
 
             try
             {
-                // Delete the old zip file
                 string zipFilePath = Path.Combine(installPath, "ValheimWithBepInEx.zip");
-                if (File.Exists(zipFilePath))
-                {
-                    File.Delete(zipFilePath);
-                }
+                if (File.Exists(zipFilePath)) File.Delete(zipFilePath);
 
                 long totalSize = await GetTotalSizeFromServer(_httpClient);
                 await DownloadDirectoryAsync(_httpClient, serverUri, installPath, totalSize);
@@ -104,20 +109,17 @@ namespace ValheimLauncher2.Models.Download
             catch (Exception ex)
             {
                 _updateStatusAction($"Fehler beim Download: {ex.Message}");
-                throw; // Throw the exception so it can be handled in the calling task
+                throw;
             }
 
-            // NEW: Apply performance settings after installation is complete.
             try
             {
                 _updateStatusAction("Optimiere Start-Konfiguration...");
-                BootConfigModifier configModifier = new BootConfigModifier(installPath);
+                var configModifier = new BootConfigModifier(installPath);
                 configModifier.ApplyPerformanceSettings();
             }
             catch (Exception ex)
             {
-                // Log the error, but don't stop the whole process.
-                // The UI will get the message via the status action.
                 _updateStatusAction($"Fehler bei boot.config Optimierung: {ex.Message}");
             }
 
@@ -130,10 +132,7 @@ namespace ValheimLauncher2.Models.Download
             try
             {
                 string sizeString = await httpClient.GetStringAsync(requestUri);
-                if (long.TryParse(sizeString, out var result))
-                {
-                    return result;
-                }
+                if (long.TryParse(sizeString, out var result)) return result;
                 _updateStatusAction("Fehler: Konnte Gesamtgröße nicht lesen.");
                 return 0L;
             }
@@ -147,12 +146,8 @@ namespace ValheimLauncher2.Models.Download
         public async Task DownloadDirectoryAsync(HttpClient httpClient, string serverUri, string localBasePath, long totalSize)
         {
             string html = await httpClient.GetStringAsync(serverUri);
-            HtmlDocument htmlDocument = new HtmlDocument();
+            var htmlDocument = new HtmlDocument();
             htmlDocument.LoadHtml(html);
-
-            // This variable needs to track the total download progress across all files.
-            // It must be declared outside the loop.
-            long downloadedSize = 0L;
 
             var filesToDownload = htmlDocument.DocumentNode.SelectNodes("//a[@href]")
                 ?.Where(node => !node.InnerText.Contains("[To Parent Directory]"))
@@ -164,46 +159,60 @@ namespace ValheimLauncher2.Models.Download
                 return;
             }
 
+            var baseUri = new Uri(serverUri);
+
             foreach (HtmlNode item in filesToDownload)
             {
-                string relativePath = item.GetAttributeValue("href", string.Empty);
-                Uri fullUri = new Uri(new Uri(serverUri), relativePath);
-                string localPath = Path.Combine(localBasePath, relativePath.TrimStart('/'));
+                string href = item.GetAttributeValue("href", string.Empty);
+                var fullUri = new Uri(baseUri, href);
+
+                string relativePath = baseUri.MakeRelativeUri(fullUri).ToString();
+                relativePath = Uri.UnescapeDataString(relativePath);
 
                 if (relativePath.EndsWith('/'))
                 {
-                    Directory.CreateDirectory(localPath);
-                    await DownloadDirectoryAsync(httpClient, fullUri.ToString(), localPath, totalSize);
+                    string newLocalPath = Path.Combine(localBasePath, relativePath.Trim('/'));
+                    Directory.CreateDirectory(newLocalPath);
+                    await DownloadDirectoryAsync(httpClient, fullUri.ToString(), newLocalPath, totalSize);
                     continue;
                 }
 
+                string localPath = Path.Combine(localBasePath, relativePath);
+
                 try
                 {
-                    using HttpResponseMessage response = await httpClient.GetAsync(fullUri, HttpCompletionOption.ResponseHeadersRead);
-                    response.EnsureSuccessStatusCode();
-
-                    long? contentLength = response.Content.Headers.ContentLength;
-                    byte[] buffer = new byte[8192];
-
-                    _updateStatusAction($"Lade herunter: {Path.GetFileName(localPath)}");
-
-                    using (FileStream fileStream = new FileStream(localPath, FileMode.Create, FileAccess.Write, FileShare.None, buffer.Length, useAsync: true))
+                    using (var response = await httpClient.GetAsync(fullUri, HttpCompletionOption.ResponseHeadersRead))
                     {
-                        using Stream responseStream = await response.Content.ReadAsStreamAsync();
-                        int bytesRead;
-                        while ((bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
-                        {
-                            await fileStream.WriteAsync(buffer, 0, bytesRead);
-                            downloadedSize += bytesRead;
+                        response.EnsureSuccessStatusCode();
 
-                            // Correct logic for updating progress
-                            if (totalSize > 0)
+                        _updateStatusAction($"Lade herunter: {Path.GetFileName(localPath)}");
+                        Directory.CreateDirectory(Path.GetDirectoryName(localPath));
+
+                        using (var fileStream = new FileStream(localPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
+                        {
+                            using (Stream responseStream = await response.Content.ReadAsStreamAsync())
                             {
-                                double progressPercentage = (double)downloadedSize / totalSize * 100;
-                                Dispatcher.UIThread.Invoke(() => _updateProgressAction(progressPercentage));
+                                var buffer = new byte[81920];
+                                int bytesRead;
+                                while ((bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                                {
+                                    await fileStream.WriteAsync(buffer, 0, bytesRead);
+                                    _totalBytesDownloaded += bytesRead;
+
+                                    if (totalSize > 0)
+                                    {
+                                        double progressPercentage = (double)_totalBytesDownloaded / totalSize * 100;
+                                        Dispatcher.UIThread.Invoke(() => _updateProgressAction(progressPercentage));
+                                    }
+                                }
                             }
-                        }
+                        } // <-- Der using-Block schließt hier den fileStream und gibt die Datei frei.
                     }
+
+                    // ======================================================================
+                    // HIER IST DIE LÖSUNG: Eine kurze Pause einlegen.
+                    // ======================================================================
+                    await Task.Delay(100);
 
                     if (Path.GetExtension(localPath).Equals(".zip", StringComparison.OrdinalIgnoreCase))
                     {
@@ -220,7 +229,7 @@ namespace ValheimLauncher2.Models.Download
 
         private async Task ExtractAndMoveZipAsync(string zipFilePath)
         {
-            _updateStatusAction("Extrahiere die Zip Datei...");
+            _updateStatusAction("Extrahiere Spieldateien...");
             string tempDir = Path.Combine(Path.GetDirectoryName(zipFilePath), "ValheimWithBepInExTemp");
             try
             {
@@ -232,18 +241,8 @@ namespace ValheimLauncher2.Models.Download
                         entry.WriteToDirectory(tempDir, new ExtractionOptions { ExtractFullPath = true, Overwrite = true });
                     }
                 }
-
-                _updateStatusAction("Verschiebe die extrahierten Daten...");
-                string[] files = Directory.GetFiles(tempDir, "*.*", SearchOption.AllDirectories);
-                foreach (string file in files)
-                {
-                    string relativePath = file.Substring(tempDir.Length + 1);
-                    string destinationPath = Path.Combine(Path.GetDirectoryName(zipFilePath), relativePath);
-
-                    Directory.CreateDirectory(Path.GetDirectoryName(destinationPath));
-                    File.Move(file, destinationPath, true);
-                }
-
+                _updateStatusAction("Verschiebe extrahierte Daten...");
+                MergeDirectory(tempDir, Path.GetDirectoryName(zipFilePath));
                 _updateStatusAction("Räume auf...");
                 Directory.Delete(tempDir, recursive: true);
                 File.Delete(zipFilePath);
@@ -252,6 +251,17 @@ namespace ValheimLauncher2.Models.Download
             {
                 _updateStatusAction($"Fehler beim Entpacken oder Verschieben: {ex.Message}");
                 throw;
+            }
+        }
+
+        private void MergeDirectory(string sourceDir, string targetDir)
+        {
+            Directory.CreateDirectory(targetDir);
+            foreach (var file in Directory.GetFiles(sourceDir, "*.*", SearchOption.AllDirectories))
+            {
+                string targetFile = Path.Combine(targetDir, file.Substring(sourceDir.Length + 1));
+                Directory.CreateDirectory(Path.GetDirectoryName(targetFile));
+                File.Move(file, targetFile, true);
             }
         }
     }

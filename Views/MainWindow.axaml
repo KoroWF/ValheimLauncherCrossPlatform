@@ -6,7 +6,7 @@
         xmlns:views="clr-namespace:ValheimLauncher2.Views"
         mc:Ignorable="d" d:DesignWidth="1024" d:DesignHeight="768"
         x:Class="ValheimLauncher2.Views.MainWindow"
-        Icon="/Assets/avalonia-logo.ico"
+        Icon="/Assets/Logo.ico"
         Title="ValheimLauncher2"
         Width="1024" Height="768"
         CanResize="False"
