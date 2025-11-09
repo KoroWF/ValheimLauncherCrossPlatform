@@ -1,47 +1,56 @@
 ﻿using System.Collections.Generic;
 
-// You can adjust the namespace to your project
 namespace ValheimLauncher2.Models.Settings
 {
     /// <summary>
-    /// Represents the entire structure of the launcher.settings.json file.
+    /// Represents the structure of the launcher settings configuration.
     /// </summary>
     public class LauncherSettings
     {
         /// <summary>
-        /// Simple property for the Vulkan switch.
+        /// Gets or sets a value indicating whether Vulkan is enabled.
         /// </summary>
         public bool VulkanEnabled { get; set; }
 
         /// <summary>
-        /// Contains all settings related to the modpack.
+        /// Gets or sets the modpack-related settings.
         /// </summary>
         public ModpackSettings Modpack { get; set; }
 
         /// <summary>
-        /// The installation path of Valheim.
+        /// Gets or sets the installation path of Valheim.
         /// </summary>
         public string ValheimInstallPath { get; set; }
 
-        public LauncherSettings() // Constructor for default values
+        /// <summary>
+        /// Initializes a new instance of the <see cref="LauncherSettings"/> class with default values.
+        /// </summary>
+        public LauncherSettings()
         {
             VulkanEnabled = false;
             Modpack = new ModpackSettings();
-            ValheimInstallPath = "-"; // Default value for the installation path
+            ValheimInstallPath = "-";
         }
-
     }
 
     /// <summary>
-    /// Represents the "Modpack" object within the JSON file.
+    /// Represents the modpack configuration within the launcher settings.
     /// </summary>
     public class ModpackSettings
     {
+        /// <summary>
+        /// Gets or sets the current local version of the modpack.
+        /// </summary>
         public string CurrentLocalVersion { get; set; }
 
-        // 'object?' is flexible here in case the API response is more complex or can be null.
+        /// <summary>
+        /// Gets or sets the last fetched Thunderstore API response.
+        /// </summary>
         public object? LastFetchedThunderstoreApiResponse { get; set; }
 
+        /// <summary>
+        /// Gets or sets the list of expected mod files.
+        /// </summary>
         public List<string> ExpectedModFiles { get; set; }
     }
 }

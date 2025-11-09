@@ -6,53 +6,80 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
+using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Newtonsoft.Json.Linq;
 using SharpCompress.Archives;
 using SharpCompress.Common;
+using ValheimCrossPlatformLauncher;
 using ValheimLauncher2.Models.Settings;
 
 namespace ValheimLauncher2.Models.Download
 {
+    /// <summary>
+    /// Provides functionality to download, update, and manage Valheim modpacks and their dependencies.
+    /// </summary>
     public class ModDownloader
     {
         private static readonly HttpClient _httpClient = new();
         private readonly Action<string> _updateStatus;
         private readonly Action<string> _updateProgress;
+        private readonly Action<string> _updateSpeed;
         private readonly LauncherSettings _settings;
         private readonly Action _saveSettings;
+        private readonly Func<string, Task> _showError;
+        private Window _parentWindow;
 
-        public ModDownloader(Action<string> updateStatus, Action<string> updateProgress, LauncherSettings settings, Action saveSettings)
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ModDownloader"/> class.
+        /// </summary>
+        /// <param name="updateStatus">Action to update the status message.</param>
+        /// <param name="updateProgress">Action to update the progress value.</param>
+        /// <param name="updateSpeed">Action to update the download speed.</param>
+        /// <param name="settings">The launcher settings instance.</param>
+        /// <param name="saveSettings">Action to save the settings.</param>
+        /// <param name="showError">Function to display error messages asynchronously.</param>
+        public ModDownloader(Action<string> updateStatus, Action<string> updateProgress, Action<string> updateSpeed, LauncherSettings settings, Action saveSettings, Func<string, Task> showError)
         {
             _updateStatus = updateStatus;
             _updateProgress = updateProgress;
+            _updateSpeed = updateSpeed;
             _settings = settings;
             _saveSettings = saveSettings;
+            _showError = showError;
         }
 
+        /// <summary>
+        /// Checks for available updates for the modpack by comparing local and online versions.
+        /// </summary>
+        /// <returns>A tuple containing the online version and a boolean indicating if an update is needed.</returns>
         public async Task<(string? onlineVersion, bool needsUpdate)> CheckForUpdatesAsync()
         {
-            _updateStatus("Prüfe Mod-Versionen...");
+            _updateStatus("Checking mod versions...");
             var apiData = await GetThunderstoreApiData("ImmernDarNew/ImmernDarNew_Modpack");
             if (apiData.versionNumber == null)
             {
-                _updateStatus("Fehler: Thunderstore API nicht erreichbar.");
+                _updateStatus("Error: Thunderstore API not reachable.");
                 return (null, false);
             }
 
             string localVersion = _settings.Modpack.CurrentLocalVersion;
             bool needsUpdate = localVersion != apiData.versionNumber;
 
-            _updateStatus(needsUpdate ? $"Update auf v.{apiData.versionNumber} verfügbar!" : "Mods sind aktuell.");
+            _updateStatus(needsUpdate ? $"Update to v.{apiData.versionNumber} available!" : "Mods are up to date.");
             return (apiData.versionNumber, needsUpdate);
         }
 
+        /// <summary>
+        /// Forces an update of the modpack, downloading and installing all dependencies.
+        /// </summary>
         public async Task ForceUpdateModpackAsync()
         {
-            _updateStatus("Starte Mod-Update...");
+            _updateStatus("Starting mod update...");
             var apiData = await GetThunderstoreApiData("ImmernDarNew/ImmernDarNew_Modpack");
             if (apiData.dependencies == null)
             {
-                _updateStatus("Fehler: Konnte Modpack-Abhängigkeiten nicht abrufen.");
+                _updateStatus("Error: Could not retrieve modpack dependencies.");
                 return;
             }
 
@@ -77,14 +104,19 @@ namespace ValheimLauncher2.Models.Download
 
                 _settings.Modpack.CurrentLocalVersion = apiData.versionNumber;
                 _saveSettings();
-                _updateStatus("Modpack erfolgreich aktualisiert!");
+                _updateStatus("Modpack updated successfully!");
             }
             else
             {
-                _updateStatus("Mod-Update mit Fehlern abgeschlossen.");
+                _updateStatus("Mod update completed with errors.");
             }
         }
 
+        /// <summary>
+        /// Downloads and extracts all required mod dependencies.
+        /// </summary>
+        /// <param name="dependencies">The list of mod dependencies to download and extract.</param>
+        /// <returns>True if all operations were successful; otherwise, false.</returns>
         private async Task<bool> DownloadAndExtractDependenciesAsync(string[] dependencies)
         {
             string baseDirectory = _settings.ValheimInstallPath;
@@ -105,7 +137,7 @@ namespace ValheimLauncher2.Models.Download
                 double percentage = (double)completedDependencies / totalDependencies * 100;
                 _updateProgress(percentage.ToString("F0", CultureInfo.InvariantCulture));
 
-                _updateStatus($"Verarbeite: {dependency}");
+                _updateStatus($"Processing: {dependency}");
                 bool isBepInExPack = dependency.Contains("denikson-BepInExPack_Valheim", StringComparison.OrdinalIgnoreCase);
 
                 try
@@ -124,43 +156,71 @@ namespace ValheimLauncher2.Models.Download
                     }
                     catch (Exception ex)
                     {
-                        Debug.WriteLine($"Konnte Online-Dateigröße für {dependency} nicht abrufen: {ex.Message}");
+                        _updateStatus($"Could not retrieve online file size for {dependency}: {ex.Message}");
+                        await MessageBox.Show(_parentWindow, $"Could not retrieve online file size for {dependency}: {ex.Message}");
                     }
-
 
                     if (File.Exists(cachedZipPath) && onlineFileSize > 0)
                     {
                         var localFileInfo = new FileInfo(cachedZipPath);
                         if (localFileInfo.Length == onlineFileSize)
                         {
-                            _updateStatus($"Verwende Cache für: {dependency}");
+                            _updateStatus($"Using cache for: {dependency}");
                             downloadNeeded = false;
                         }
                     }
 
-
                     if (downloadNeeded)
                     {
                         File.Delete(cachedZipPath);
-                        _updateStatus($"Lade herunter: {dependency}");
+                        // Hole Dateigröße
+                        long fileSize =0;
+                        using (var headResp = await _httpClient.SendAsync(new HttpRequestMessage(HttpMethod.Head, downloadUrl)))
+                        {
+                            if (headResp.IsSuccessStatusCode)
+                                fileSize = headResp.Content.Headers.ContentLength ??0;
+                        }
+                        string fileSizeMb = fileSize >0 ? $"({(fileSize /1024.0 /1024.0):F2} MB)" : "";
+                        _updateStatus($"Downloading: {dependency}");
                         using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
                         {
                             response.EnsureSuccessStatusCode();
                             using (var fileStream = new FileStream(cachedZipPath, FileMode.Create, FileAccess.Write, FileShare.None))
                             {
-                                await response.Content.CopyToAsync(fileStream);
+                                var buffer = new byte[81920];
+                                int bytesRead;
+                                long totalBytes =0;
+                                var lastReportTime = DateTime.UtcNow;
+                                long lastBytes =0;
+                                using (var responseStream = await response.Content.ReadAsStreamAsync())
+                                {
+                                    while ((bytesRead = await responseStream.ReadAsync(buffer,0, buffer.Length)) >0)
+                                    {
+                                        await fileStream.WriteAsync(buffer, 0, bytesRead);
+                                        totalBytes += bytesRead;
+                                        var now = DateTime.UtcNow;
+                                        if ((now - lastReportTime).TotalMilliseconds >= 100)
+                                        {
+                                            double downloadedMb = totalBytes / (1024.0 * 1024.0);
+                                            double totalMb = fileSize / (1024.0 * 1024.0);
+                                            string progressText = fileSize > 0 ? $"{downloadedMb:F2} / {totalMb:F2} MB" : $"{downloadedMb:F2} MB";
+                                            _updateSpeed?.Invoke(progressText);
+                                            lastBytes = totalBytes;
+                                            lastReportTime = now;
+                                        }
+                                    }
+                                }
                             }
                         }
+ 
                     }
 
                     string extractPath = isBepInExPack ? baseDirectory : Path.Combine(pluginsPath, dependency);
                     Directory.CreateDirectory(extractPath);
                     using (var archive = ArchiveFactory.Open(cachedZipPath))
                     {
-
                         foreach (var entry in archive.Entries)
                         {
-
                             if (!entry.IsDirectory && !entry.Key.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase))
                             {
 
@@ -168,21 +228,29 @@ namespace ValheimLauncher2.Models.Download
                             }
                         }
                     }
+
                 }
                 catch (Exception ex)
                 {
-                    _updateStatus($"Fehler bei {dependency}: {ex.Message}");
-                    Debug.WriteLine(ex);
+                    _updateStatus($"Error with {dependency}. Maybe in use!");
+                    await MessageBox.Show(_parentWindow, $"Error with {dependency}. Maybe in use!");
                     allOperationsSuccessful = false;
                 }
+
             }
 
+            _updateSpeed?.Invoke(""); 
             return allOperationsSuccessful;
         }
 
+        /// <summary>
+        /// Cleans up old zip files in the plugin zip directory that are not part of the expected dependencies.
+        /// </summary>
+        /// <param name="pluginZipPath">The path to the plugin zip directory.</param>
+        /// <param name="expectedDependencies">The list of expected dependencies.</param>
         private async Task CleanupOldZipsAsync(string pluginZipPath, List<string> expectedDependencies)
         {
-            _updateStatus("Bereinige alte ZIP-Dateien...");
+            _updateStatus("Cleaning up old ZIP files...");
             await Task.Run(() =>
             {
                 if (!Directory.Exists(pluginZipPath)) return;
@@ -195,21 +263,26 @@ namespace ValheimLauncher2.Models.Download
                     {
                         try
                         {
-                            _updateStatus($"Lösche alte ZIP-Datei: {zipName}");
+                            _updateStatus($"Deleting old ZIP file: {zipName}");
                             File.Delete(zipFile);
                         }
                         catch (Exception ex)
                         {
-                            Debug.WriteLine($"Konnte alte ZIP-Datei nicht löschen {zipName}: {ex.Message}");
+                            Debug.WriteLine($"Could not delete old ZIP file {zipName}: {ex.Message}");
                         }
                     }
                 }
             });
         }
 
+        /// <summary>
+        /// Cleans up old mod folders in the plugins directory that are not part of the expected dependencies.
+        /// </summary>
+        /// <param name="pluginsPath">The path to the plugins directory.</param>
+        /// <param name="expectedDependencies">The list of expected dependencies.</param>
         private async Task CleanupOldModsAsync(string pluginsPath, List<string> expectedDependencies)
         {
-            _updateStatus("Bereinige alte Mod-Ordner...");
+            _updateStatus("Cleaning up old mod folders...");
             await Task.Run(() =>
             {
                 if (!Directory.Exists(pluginsPath)) return;
@@ -224,21 +297,24 @@ namespace ValheimLauncher2.Models.Download
                     {
                         try
                         {
-                            _updateStatus($"Lösche alten Mod-Ordner: {dirName}");
+                            _updateStatus($"Deleting old mod folder: {dirName}");
                             Directory.Delete(dirPath, true);
                         }
                         catch (Exception ex)
                         {
-                            Debug.WriteLine($"Konnte alten Mod-Ordner nicht löschen {dirName}: {ex.Message}");
+                            Debug.WriteLine($"Could not delete old mod folder {dirName}: {ex.Message}");
                         }
                     }
                 }
             });
         }
 
+        /// <summary>
+        /// Installs the BepInEx core components by merging the extracted folder into the base directory.
+        /// </summary>
         private async Task InstallBepInExCoreAsync()
         {
-            _updateStatus("Installiere BepInEx Kernkomponenten...");
+            _updateStatus("Installing BepInEx core components...");
             string baseDirectory = _settings.ValheimInstallPath;
             string sourceFolderPath = Path.Combine(baseDirectory, "BepInExPack_Valheim");
 
@@ -248,17 +324,22 @@ namespace ValheimLauncher2.Models.Download
                 {
                     MergeDirectory(sourceFolderPath, baseDirectory);
                     Directory.Delete(sourceFolderPath, true);
-                    _updateStatus("BepInEx Kernkomponenten erfolgreich installiert.");
+                    _updateStatus("BepInEx core components installed successfully.");
                 }
                 catch (Exception ex)
                 {
-                    _updateStatus($"Fehler bei BepInEx-MOD-Installation: {ex.Message}");
+                    _updateStatus($"Error during BepInEx core installation: {ex.Message}");
                     Debug.WriteLine(ex);
                 }
             }
             await Task.CompletedTask;
         }
 
+        /// <summary>
+        /// Merges the contents of the source directory into the target directory.
+        /// </summary>
+        /// <param name="sourceDir">The source directory.</param>
+        /// <param name="targetDir">The target directory.</param>
         private void MergeDirectory(string sourceDir, string targetDir)
         {
             Directory.CreateDirectory(targetDir);
@@ -270,6 +351,11 @@ namespace ValheimLauncher2.Models.Download
             }
         }
 
+        /// <summary>
+        /// Retrieves Thunderstore API data for the specified modpack.
+        /// </summary>
+        /// <param name="modpackId">The modpack identifier.</param>
+        /// <returns>A tuple containing the download URL, version number, and dependencies.</returns>
         private async Task<(string? downloadUrl, string? versionNumber, string[]? dependencies)> GetThunderstoreApiData(string modpackId)
         {
             try
@@ -291,6 +377,11 @@ namespace ValheimLauncher2.Models.Download
             }
         }
 
+        /// <summary>
+        /// Waits for the directory cleanup to complete by checking for remaining unexpected folders.
+        /// </summary>
+        /// <param name="path">The directory path to check.</param>
+        /// <param name="expectedFolders">The set of expected folder names.</param>
         private async Task WaitForDirectoryCleanup(string path, IEnumerable<string> expectedFolders)
         {
             int retries = 10;

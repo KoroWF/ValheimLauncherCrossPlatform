@@ -1,15 +1,52 @@
-<Window xmlns="https://github.com/avaloniaui"
+<Window     xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="clr-namespace:ValheimLauncher2.ViewModels"
+        mc:Ignorable="d" d:DesignWidth="1012" d:DesignHeight="704"
         x:Class="ValheimCrossPlatformLauncher.ConfirmDialog"
         SizeToContent="WidthAndHeight"
         CanResize="False"
         WindowStartupLocation="CenterOwner"
-        Title="Bestätigung">
-  <StackPanel Margin="20" Spacing="10">
-    <TextBlock Name="MessageBlock" TextWrapping="Wrap" MinWidth="250" MaxWidth="400" />
-    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,15,0,0" Spacing="10">
-      <Button Content="Ja" Name="YesButton" IsDefault="True" />
-      <Button Content="Nein" Name="NoButton" IsCancel="True" />
+        Title="Bestätigung"
+        SystemDecorations="None">
+
+<Window.Background>
+    <ImageBrush Source="avares://ValheimLauncherCrossPlatform/Assets/pic/background.png" 
+                Stretch="UniformToFill" 
+                AlignmentX="Center" 
+                AlignmentY="Center"/>           
+</Window.Background>
+   
+  <StackPanel Margin="50" Spacing="50" MinHeight="210" MinWidth="320">
+    <TextBlock Text="" Name="MessageBlock" FontFamily="/Assets/fonts/Norse.otf#Norse"  FontSize="16" TextWrapping="Wrap" MinWidth="300" MaxWidth="300" Margin="0,25,0,-40" MinHeight="80" MaxHeight="80"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,0" Spacing="10">
+    
+        <!-- Ja-Button -->
+        <Button x:Name="Ja" Content="" Name="YesButton" IsDefault="True" Width="80" Height="40">
+            <Button.Template>
+                <ControlTemplate>
+                    <Grid>
+                        <Image Name="BackgroundImage" 
+                               Source="avares://ValheimLauncherCrossPlatform/Assets/pic/OK.png" 
+                               Stretch="UniformToFill"/>
+                    </Grid>
+                </ControlTemplate>
+            </Button.Template>
+        </Button>
+
+        <!-- Nein-Button -->
+        <Button x:Name="Nein" Content="" Name="NoButton" IsCancel="True" Width="80" Height="40">
+            <Button.Template>
+                <ControlTemplate>
+                    <Grid>
+                        <Image Name="BackgroundImage" 
+                               Source="avares://ValheimLauncherCrossPlatform/Assets/pic/A.png" 
+                               Stretch="UniformToFill"/>
+                    </Grid>
+                </ControlTemplate>
+            </Button.Template>
+        </Button>
     </StackPanel>
   </StackPanel>
 </Window>

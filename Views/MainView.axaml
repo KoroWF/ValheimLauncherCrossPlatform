@@ -176,8 +176,12 @@
            HorizontalAlignment="Center" VerticalAlignment="Top"
            HorizontalContentAlignment="Center" Margin="200,450,0,0"
            Width="700" Height="32"
-           Foreground="White" FontFamily="Eras ITC" FontSize="10" />
-
+           Foreground="White" FontFamily="/Assets/fonts/Norse.otf#Norse" FontSize="15" />
+    <Label Content="{Binding DownloadSpeedText}"
+           HorizontalAlignment="Center" VerticalAlignment="Top"
+           HorizontalContentAlignment="Center" Margin="200,435,0,0"
+           Width="700" Height="32"
+           Foreground="White" FontFamily="/Assets/fonts/Norse.otf#Norse" FontSize="12" />
     <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" Margin="310,570,0,0" Orientation="Vertical">
       <StackPanel Orientation="Horizontal">
         <Label Content="MP Lokal:" Width="68" Height="24" Foreground="#FFBFBFBF" FontFamily="/Assets/fonts/Norse.otf#Norse" />
@@ -193,7 +197,7 @@
 
     <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" Margin="205,450,0,0" Orientation="Horizontal">
       <Label Content="DirectX 11" VerticalAlignment="Center" Foreground="White" FontFamily="/Assets/fonts/Norse.otf#Norse"/>
-      <ToggleSwitch Margin="10,0"
+      <ToggleSwitch Margin="8,0"
                     IsChecked="{Binding VulkanEnabled, Mode=TwoWay}"
                     Classes="noText" 
                     OnContent=""

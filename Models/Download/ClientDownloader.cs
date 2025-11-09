@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -14,25 +15,44 @@ using ValheimLauncher2.Models.PerformanceGame;
 
 namespace ValheimLauncher2.Models.Download
 {
+    /// <summary>
+    /// Provides functionality to download, install, and repair the Valheim game client.
+    /// </summary>
     public class ClientDownloader
     {
         private static readonly HttpClient _httpClient = new HttpClient();
         private readonly Action<string> _updateStatusAction;
         private readonly Action<double> _updateProgressAction;
+        private readonly Action<string> _updateSpeedAction;
         private long _totalBytesDownloaded;
 
-        public ClientDownloader(Action<string> updateStatus, Action<double> updateProgress)
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ClientDownloader"/> class.
+        /// </summary>
+        /// <param name="updateStatus">Action to update the status message.</param>
+        /// <param name="updateProgress">Action to update the progress value.</param>
+        /// <param name="updateSpeed">Action to update the download speed.</param>
+        public ClientDownloader(Action<string> updateStatus, Action<double> updateProgress, Action<string> updateSpeed)
         {
             _updateStatusAction = updateStatus;
             _updateProgressAction = updateProgress;
+            _updateSpeedAction = updateSpeed;
         }
 
+        /// <summary>
+        /// Installs the Valheim game client to the specified path.
+        /// </summary>
+        /// <param name="installPath">The installation directory path.</param>
         public async Task InstallGameAsync(string installPath)
         {
+            // Immer sicherstellen, dass im VImmerndar-Ordner installiert wird
+            if (!installPath.EndsWith("VImmerndar", StringComparison.OrdinalIgnoreCase))
+                installPath = Path.Combine(installPath, "VImmerndar");
+
             try
             {
                 _updateStatusAction("Installiere das Hauptspiel...");
-                await installer(installPath);
+                await Installer(installPath);
                 _updateStatusAction("Das Hauptspiel wurde fertig geladen.");
             }
             catch (Exception ex)
@@ -42,13 +62,20 @@ namespace ValheimLauncher2.Models.Download
             }
         }
 
+        /// <summary>
+        /// Repairs the Valheim installation by deleting specific folders and reinstalling the game.
+        /// </summary>
+        /// <param name="installPath">The installation directory path.</param>
         public async Task FixValheimAsync(string installPath)
         {
+            if (!installPath.EndsWith("VImmerndar", StringComparison.OrdinalIgnoreCase))
+                installPath = Path.Combine(installPath, "VImmerndar");
+
             try
             {
                 _updateStatusAction("Überprüfe vorhandene Daten auf Fehler!");
-                await deleteFolder(installPath);
-                await installer(installPath);
+                await DeleteFolder(installPath);
+                await Installer(installPath);
                 _updateStatusAction("Überprüfung beendet, bereit zum Starten!");
             }
             catch (Exception ex)
@@ -58,9 +85,13 @@ namespace ValheimLauncher2.Models.Download
             }
         }
 
-        private async Task deleteFolder(string baseDirectory)
+        /// <summary>
+        /// Deletes specific folders within the base directory.
+        /// </summary>
+        /// <param name="baseDirectory">The base directory to clean up.</param>
+        private static Task DeleteFolder(string baseDirectory)
         {
-            
+
             string[] foldersToDelete = { "BepInEx/patchers", "BepInEx/config/Azumatt.MinimalUI_Backgrounds", "BepInEx/config/Intermission", "BepInEx/config/Seasonality", "valheim_Data" };
             foreach (string path in foldersToDelete)
             {
@@ -71,9 +102,15 @@ namespace ValheimLauncher2.Models.Download
                     catch (Exception ex) { throw new IOException($"Fehler beim Löschen von {fullPath}", ex); }
                 }
             }
+
+            return Task.CompletedTask;
         }
 
-        public async Task installer(string installPath)
+        /// <summary>
+        /// Downloads and installs the Valheim game client to the specified path.
+        /// </summary>
+        /// <param name="installPath">The installation directory path.</param>
+        public async Task Installer(string installPath)
         {
             string serverUri = string.Empty;
 
@@ -126,8 +163,14 @@ namespace ValheimLauncher2.Models.Download
             }
 
             Dispatcher.UIThread.Invoke(() => _updateProgressAction(100));
+            _updateSpeedAction?.Invoke(""); 
         }
 
+        /// <summary>
+        /// Retrieves the total size of the game files from the server.
+        /// </summary>
+        /// <param name="httpClient">The HTTP client to use for the request.</param>
+        /// <returns>The total size in bytes, or0 if unavailable.</returns>
         private async Task<long> GetTotalSizeFromServer(HttpClient httpClient)
         {
             string requestUri = "https://www.immerndar.de/gesamtgroesse.txt";
@@ -145,6 +188,13 @@ namespace ValheimLauncher2.Models.Download
             }
         }
 
+        /// <summary>
+        /// Downloads all files and directories from the specified server URI to the local base path.
+        /// </summary>
+        /// <param name="httpClient">The HTTP client to use for downloading.</param>
+        /// <param name="serverUri">The server URI to download from.</param>
+        /// <param name="localBasePath">The local base directory to save files.</param>
+        /// <param name="totalSize">The total size of all files for progress calculation.</param>
         public async Task DownloadDirectoryAsync(HttpClient httpClient, string serverUri, string localBasePath, long totalSize)
         {
             string html = await httpClient.GetStringAsync(serverUri);
@@ -196,10 +246,25 @@ namespace ValheimLauncher2.Models.Download
                             {
                                 var buffer = new byte[81920];
                                 int bytesRead;
+                                var lastReportTime = DateTime.UtcNow;
+                                long lastBytes = 0;
+                                Queue<double> speedSamples = null;
+                                int maxSamples = 5;
+
                                 while ((bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
                                 {
                                     await fileStream.WriteAsync(buffer, 0, bytesRead);
                                     _totalBytesDownloaded += bytesRead;
+
+                                    var now = DateTime.UtcNow;
+                                    if ((now - lastReportTime).TotalMilliseconds >= 200)
+                                    {
+                                        double downloadedMb = _totalBytesDownloaded / (1024.0 * 1024.0);
+                                        double totalMb = totalSize / (1024.0 * 1024.0);
+                                        string progressText = totalSize > 0 ? $"{downloadedMb:F2} / {totalMb:F2} MB" : $"{downloadedMb:F2} MB";
+                                        _updateSpeedAction?.Invoke(progressText);
+                                        lastReportTime = now;
+                                    }
 
                                     if (totalSize > 0)
                                     {
@@ -226,6 +291,10 @@ namespace ValheimLauncher2.Models.Download
             }
         }
 
+        /// <summary>
+        /// Extracts the specified zip file and moves its contents to the target directory.
+        /// </summary>
+        /// <param name="zipFilePath">The path to the zip file.</param>
         private void ExtractAndMoveZip(string zipFilePath)
         {
             _updateStatusAction("Extrahiere Spieldateien...");
@@ -253,6 +322,11 @@ namespace ValheimLauncher2.Models.Download
             }
         }
 
+        /// <summary>
+        /// Merges the contents of the source directory into the target directory.
+        /// </summary>
+        /// <param name="sourceDir">The source directory.</param>
+        /// <param name="targetDir">The target directory.</param>
         private void MergeDirectory(string sourceDir, string targetDir)
         {
             Directory.CreateDirectory(targetDir);

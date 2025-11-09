@@ -14,8 +14,6 @@ using ValheimCrossPlatformLauncher;
 using ValheimLauncher2.Models.Download;
 using ValheimLauncher2.Models.Settings;
 using ValheimLauncher2.Models.Utils;
-// You may need to adjust the namespace for PlatformUtils if it's in a different folder
-// using ValheimLauncher2.Models.Utils; 
 
 namespace ValheimLauncher2.ViewModels
 {
@@ -34,6 +32,9 @@ namespace ValheimLauncher2.ViewModels
 
         [ObservableProperty]
         private double _progressValue;
+
+        [ObservableProperty]
+        private string _downloadSpeedText = "";
 
         [ObservableProperty]
         [NotifyPropertyChangedFor(nameof(IsStartEnabled))]
@@ -87,11 +88,12 @@ namespace ValheimLauncher2.ViewModels
             }
             settingsFilePath = Path.Combine(launcherFolderPath, SettingsFileName);
 
-            LoadSettings(); // Load settings before initializing downloaders that depend on them
+            LoadSettings(); 
 
             _clientDownloader = new ClientDownloader(
             status => StatusText = status,
-            progress => ProgressValue = progress
+            progress => ProgressValue = progress,
+            speed => DownloadSpeedText = speed
             );
 
             _modDownloader = new ModDownloader(
@@ -103,8 +105,10 @@ namespace ValheimLauncher2.ViewModels
                     ProgressValue = p;
                 }
             },
+            speed => DownloadSpeedText = speed,
             currentSettings,
-            () => SaveSettings()
+            () => SaveSettings(),
+            async errorMsg => await MessageBox.Show(_parentWindow, errorMsg)
             );
 
             Checkstatus();
@@ -112,6 +116,9 @@ namespace ValheimLauncher2.ViewModels
             _ = CheckAndUpdateModpackAsync();
         }
 
+        /// <summary>
+        /// Loads launcher settings from disk or creates default settings if none exist.
+        /// </summary>
         private void LoadSettings()
         {
             try
@@ -138,6 +145,9 @@ namespace ValheimLauncher2.ViewModels
             InstallPathText = currentSettings.ValheimInstallPath;
         }
 
+        /// <summary>
+        /// Saves the current launcher settings to disk.
+        /// </summary>
         private void SaveSettings()
         {
             currentSettings.VulkanEnabled = VulkanEnabled;
@@ -157,24 +167,27 @@ namespace ValheimLauncher2.ViewModels
             }
         }
 
+        /// <summary>
+        /// Checks if the game is installed by verifying required files and directories.
+        /// </summary>
         private void Checkstatus()
         {
 
             string bootConfigPath = "";
-            // Check if the code is running on a macOS system
+
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                // macOS-specific path
+
                 bootConfigPath = Path.Combine(currentSettings.ValheimInstallPath, "Valheim.app", "Contents", "Resources", "Data", "boot.config");
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
-                // Linux-specific path
+
                 bootConfigPath = Path.Combine(currentSettings.ValheimInstallPath, "Valheim_Data", "boot.config");
             }
             else
             {
-                // The common path for Windows and Linux
+
                 bootConfigPath = Path.Combine(currentSettings.ValheimInstallPath, "valheim_data", "boot.config");
             }
             string patcherPath = Path.Combine(currentSettings.ValheimInstallPath, "BepInEx", "patchers");
@@ -183,6 +196,9 @@ namespace ValheimLauncher2.ViewModels
             InstallPathText = currentSettings.ValheimInstallPath;
         }
 
+        /// <summary>
+        /// Starts the Valheim game with the appropriate launch arguments for the current platform.
+        /// </summary>
         [RelayCommand]
         private async Task StartGame()
         {
@@ -192,43 +208,42 @@ namespace ValheimLauncher2.ViewModels
 
             await Task.Run(() =>
             {
-                // Steam start logic (unchanged)
                 if (Process.GetProcessesByName("steam").Length == 0)
                 {
                     StatusText = "Steam wird gestartet...";
                     if (!PlatformUtils.TryStartSteam())
                     {
-                        // Error handling...
+                        
                         return;
                     }
                     System.Threading.Thread.Sleep(5000);
                 }
 
-                // Windows logic (unchanged)
+
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 {
                         string exePath = Path.Combine(currentSettings.ValheimInstallPath, "valheim.exe");
                         Process.Start(new ProcessStartInfo(exePath) { Arguments = launchArgs, UseShellExecute = true });
 
                 }
-                // NEW, SHARED LOGIC FOR LINUX & MACOS
+
                 else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                 {
                     string installPath = currentSettings.ValheimInstallPath;
                     string scriptPath = Path.Combine(installPath, "start_game_bepinex.sh");
                     string binaryPath = Path.Combine(installPath, "Valheim.x86_64");
 
-                    // Perform file checks and set permissions
+
                     if (!File.Exists(scriptPath))
                     {
-                        // Error: Script not found
+
                         StatusText = "Fehler: start_game_bepinex.sh nicht gefunden!";
                         IsBusy = false;
                         return;
                     }
                     if (!File.Exists(binaryPath))
                     {
-                        // Error: Game binary not found
+
                         StatusText = "Fehler: Valheim.x86_64 nicht gefunden!";
                         IsBusy = false;
                         return;
@@ -239,10 +254,10 @@ namespace ValheimLauncher2.ViewModels
 
                     try
                     {
-                        // This command ensures the terminal runs the script and stays open afterwards.
-                        string command = $"\"{scriptPath}\""; // Put path in quotes
 
-                        // List of possible terminal emulators
+                        string command = $"\"{scriptPath}\""; 
+
+
                         var terminalCandidates = new List<(string Name, string Arguments)>
             {
  ("ptyxis", $"-e /bin/bash -c \"{command}\""),
@@ -250,11 +265,10 @@ namespace ValheimLauncher2.ViewModels
  ("konsole", $"-e /bin/bash -c \"{command}\""),
  ("xfce4-terminal", $"-e /bin/bash -c \"{command}\""),
  ("xterm", $"-e /bin/bash -c \"{command}\""),
- // If Flatpak is needed for Ptyxis
  ("flatpak", $"run org.gnome.Ptyxis -e /bin/bash -c \"{command}\"")
             };
 
-                        // Find the first available terminal emulator
+
                         string terminal = null;
                         string terminalArgs = null;
 
@@ -262,11 +276,11 @@ namespace ValheimLauncher2.ViewModels
                         {
                             try
                             {
-                                // Check if the terminal emulator is available
+
                                 var checkProcess = new ProcessStartInfo
                                 {
                                     FileName = "which",
-                                    Arguments = candidate.Name.Split(' ')[0], // Only the command name (without flatpak run)
+                                    Arguments = candidate.Name.Split(' ')[0], 
                                     RedirectStandardOutput = true,
                                     UseShellExecute = false,
                                     CreateNoWindow = true
@@ -287,20 +301,19 @@ namespace ValheimLauncher2.ViewModels
                             }
                             catch
                             {
-                                // Ignore errors for individual terminals and try the next
                                 continue;
                             }
                         }
 
                         if (terminal == null)
                         {
-                            // Error: No terminal emulator found
+                           
                             StatusText = "Fehler: Kein Terminal-Emulator (ptyxis, gnome-terminal, konsole, xterm etc.) gefunden!";
                             IsBusy = false;
                             return;
                         }
 
-                        // Create ProcessStartInfo with the found terminal
+                      
                         var processInfo = new ProcessStartInfo
                         {
                             FileName = terminal,
@@ -315,21 +328,21 @@ namespace ValheimLauncher2.ViewModels
                         }
                         catch (Exception ex)
                         {
-                            // Error handling if the terminal cannot be started
+                           
                             StatusText = $"Fehler beim Starten des Spiels: {ex.Message}";
                             IsBusy = false;
                         }
                     }
                     catch (Exception ex)
                     {
-                        // Error handling if the terminal cannot be started
+                        
                         StatusText = $"Fehler beim Starten des Spiels: {ex.Message}";
                         IsBusy = false;
                     }
                 }
                 else
                 {
-                    // Error handling (unchanged)
+                    
                     Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
          {
              StatusText = "Fehler: start_game_bepinex.sh nicht gefunden!";
@@ -346,7 +359,9 @@ namespace ValheimLauncher2.ViewModels
         }
 
 
-        // NEW HELPER METHOD: Sets execute permissions on Linux/macOS
+        /// <summary>
+        /// Sets execute permissions for a file on Linux or macOS.
+        /// </summary>
         private void EnsureExecutable(string filePath)
         {
             // This method is only called if we already know we're on Linux/macOS.
@@ -379,18 +394,20 @@ namespace ValheimLauncher2.ViewModels
             }
         }
 
+        /// <summary>
+        /// Installs the game to a user-selected directory and sets up required files.
+        /// </summary>
         [RelayCommand]
         private async Task InstallGame()
         {
+            IsBusy = true;
 
-            var message = "Für eine reibungslose Installation empfehlen wir einen einfachen Installationspfad, " +
-            "zum Beispiel \"C:\". Dabei wird ein eigener Ordner 'VImmerndar' erstellt. \n\n" +
-            "Notiz: Der Steam Ordner wird wegen automatischen Client Updates nicht empfohlen.";
+            var message = "Wählen Sie im Folgenden das Zielverzeichnis, in dem der Ordner 'VImmerndar' erstellt werden soll.";
             var result = await ConfirmDialog.Show(_parentWindow, "Installationshinweis", message);
 
             if (result == ConfirmDialog.DialogResult.Yes)
             {
-                // HERE IS THE CHANGE: We call the new method for the start folder
+             
                 string? initialDirectory = PlatformUtils.GetDefaultSystemPath();
 
                 var dialog = new OpenFolderDialog
@@ -403,6 +420,7 @@ namespace ValheimLauncher2.ViewModels
                 if (string.IsNullOrEmpty(newPath))
                 {
                     StatusText = "Installation abgebrochen.";
+                    IsBusy = false;
                     return;
                 }
 
@@ -410,8 +428,8 @@ namespace ValheimLauncher2.ViewModels
                 try
                 {
 
-                        currentSettings.ValheimInstallPath = Path.Combine(newPath, "VImmerndar");
-                        InstallPathText = Path.Combine(newPath, "VImmerndar");
+                    currentSettings.ValheimInstallPath = Path.Combine(newPath, "VImmerndar");
+                    InstallPathText = Path.Combine(newPath, "VImmerndar");
 
                     IsGameInstalled = false;
 
@@ -435,16 +453,23 @@ namespace ValheimLauncher2.ViewModels
                 }
                 finally
                 {
-                    // This block will ALWAYS be executed, regardless of whether there was an error or not.
+                    
                     IsBusy = false;
                 }
             }
+            else
+            {
+                    IsBusy = false;
+                    return;
+            }
         }
 
+        /// <summary>
+        /// Repairs the Valheim installation and resets the modpack version.
+        /// </summary>
         [RelayCommand]
         private async Task FixValheim()
         {
-            // Modpack-Version zurücksetzen und speichern
             currentSettings.Modpack.CurrentLocalVersion = "0.0.1";
             SaveSettings();
 
@@ -471,9 +496,17 @@ namespace ValheimLauncher2.ViewModels
             }
         }
 
+        /// <summary>
+        /// Forces a manual update of the modpack.
+        /// </summary>
         [RelayCommand]
         private async Task ManualModUpdate()
         {
+            currentSettings.Modpack.CurrentLocalVersion = "0.0.1";
+            SaveSettings();
+
+            LocalModpackVersion = "v. " + (currentSettings.Modpack?.CurrentLocalVersion ?? "-");
+
             IsBusy = true;
             try
             {
@@ -493,6 +526,9 @@ namespace ValheimLauncher2.ViewModels
             }
         }
 
+        /// <summary>
+        /// Checks for modpack updates and applies them if needed.
+        /// </summary>
         private async Task CheckAndUpdateModpackAsync()
         {
             if (!IsGameInstalled) return;
@@ -505,23 +541,29 @@ namespace ValheimLauncher2.ViewModels
 
             if (needsUpdate)
             {
-                IsBusy = true; // Hide buttons
-                IsGameInstalled = false; // Hide buttons
+                IsBusy = true; 
+                IsGameInstalled = false; 
                 await _modDownloader.ForceUpdateModpackAsync();
                 LocalModpackVersion = "v. " + (currentSettings.Modpack?.CurrentLocalVersion ?? "-");
-                Checkstatus(); // Enable buttons again
-                IsBusy = false; // Enable buttons again
+                Checkstatus(); 
+                IsBusy = false;
             }
         }
 
+        /// <summary>
+        /// Allows the user to change the installation path and moves game data if necessary.
+        /// </summary>
         [RelayCommand]
         private async Task ChangeInstallPath()
         {
             IsBusy = true;
             var confirmResult = await ConfirmDialog.Show(_parentWindow, "Installation verschieben?", "Möchten Sie Ihre bestehende Installation an einen neuen Ort verschieben?");
-            if (confirmResult == ConfirmDialog.DialogResult.No) return;
+            if (confirmResult == ConfirmDialog.DialogResult.No)
+            {
+                IsBusy = false;
+                return;
+            }
 
-            // HERE IS THE CHANGE: We call the new method for the start folder
             string? initialDirectory = PlatformUtils.GetDefaultSystemPath();
 
             var dialog = new OpenFolderDialog
@@ -529,15 +571,26 @@ namespace ValheimLauncher2.ViewModels
                 Title = "Wähle einen neuen Installationsordner",
                 Directory = initialDirectory
             };
+
             string oldPath = currentSettings.ValheimInstallPath;
             var newPath = await dialog.ShowAsync(_parentWindow);
 
-            if (string.IsNullOrEmpty(newPath)) return;
+            if (string.IsNullOrEmpty(newPath))
+            {
+                IsBusy = false;
+                return;
+            }
+
+            string newInstallPath = Path.Combine(newPath, "VImmerndar");
+            if (string.Equals(oldPath, newInstallPath, StringComparison.OrdinalIgnoreCase))
+            {
+                IsBusy = false;
+                return;
+            }
 
 
-                currentSettings.ValheimInstallPath = Path.Combine(newPath, "VImmerndar");
-                InstallPathText = Path.Combine(newPath, "VImmerndar");
-
+            currentSettings.ValheimInstallPath = Path.Combine(newPath, "VImmerndar");
+            InstallPathText = Path.Combine(newPath, "VImmerndar");
 
             if (Directory.Exists(oldPath) && !string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase))
             {
@@ -555,6 +608,9 @@ namespace ValheimLauncher2.ViewModels
 
         }
 
+        /// <summary>
+        /// Moves all game data from the source directory to the destination directory.
+        /// </summary>
         private async Task MoveGameDataAsync(string sourceDir, string destinationDir)
         {
             StatusText = "Verschiebe Spieldaten...";
@@ -563,23 +619,23 @@ namespace ValheimLauncher2.ViewModels
             {
                 try
                 {
-                    //1. Clean the target: Delete the target folder if it exists to avoid conflicts.
+
                     if (Directory.Exists(destinationDir))
                     {
                         Directory.Delete(destinationDir, true);
                     }
                     Directory.CreateDirectory(destinationDir);
 
-                    //2. Copy the content piece by piece. This is the safest way.
+
                     StatusText = "Kopiere Dateien...";
 
-                    // First create all subdirectories in the target
+
                     foreach (var dir in Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories))
                     {
                         Directory.CreateDirectory(dir.Replace(sourceDir, destinationDir));
                     }
 
-                    // Then copy all files
+
                     foreach (var file in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
                     {
                         File.Copy(file, file.Replace(sourceDir, destinationDir), true);
@@ -604,6 +660,9 @@ namespace ValheimLauncher2.ViewModels
             IsBusy = false;
         }
 
+        /// <summary>
+        /// Opens the current installation path in the system's file explorer.
+        /// </summary>
         [RelayCommand]
         private void OpenInstallPath()
         {
@@ -617,10 +676,12 @@ namespace ValheimLauncher2.ViewModels
             }
         }
 
+        /// <summary>
+        /// Closes the main application window.
+        /// </summary>
         [RelayCommand]
         private void CloseApplication()
         {
-            // _parentWindow is the reference to the MainWindow, which we pass in the constructor.
             _parentWindow?.Close();
         }
     }
