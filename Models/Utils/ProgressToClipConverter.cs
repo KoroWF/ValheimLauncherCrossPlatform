@@ -4,7 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 
-namespace ValheimLauncherCrossPlatform.Models.Utils // Namespace an dein neues Projekt anpassen
+namespace ValheimLauncherCrossPlatform.Models.Utils 
 {
     public class ProgressToClipConverter : IMultiValueConverter
     {

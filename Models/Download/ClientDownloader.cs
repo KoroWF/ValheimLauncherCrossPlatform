@@ -77,7 +77,7 @@ namespace ValheimLauncher2.Models.Download
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                 serverUri = "https://www.immerndar.de/ValheimWithBepInEx/Windows/";
+                serverUri = "https://www.immerndar.de/ValheimWithBepInEx/Windows/";
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
@@ -206,17 +206,14 @@ namespace ValheimLauncher2.Models.Download
                                     }
                                 }
                             }
-                        } // <-- Der using-Block schließt hier den fileStream und gibt die Datei frei.
+                        } 
                     }
 
-                    // ======================================================================
-                    // HIER IST DIE LÖSUNG: Eine kurze Pause einlegen.
-                    // ======================================================================
                     await Task.Delay(100);
 
                     if (Path.GetExtension(localPath).Equals(".zip", StringComparison.OrdinalIgnoreCase))
                     {
-                        await ExtractAndMoveZipAsync(localPath);
+                        ExtractAndMoveZip(localPath);
                     }
                 }
                 catch (Exception ex)
@@ -227,7 +224,7 @@ namespace ValheimLauncher2.Models.Download
             }
         }
 
-        private async Task ExtractAndMoveZipAsync(string zipFilePath)
+        private void ExtractAndMoveZip(string zipFilePath)
         {
             _updateStatusAction("Extrahiere Spieldateien...");
             string tempDir = Path.Combine(Path.GetDirectoryName(zipFilePath), "ValheimWithBepInExTemp");

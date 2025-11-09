@@ -58,12 +58,13 @@ namespace ValheimLauncher2.Models.Download
 
             _settings.Modpack.ExpectedModFiles = new List<string>(apiData.dependencies);
             string pluginsPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "plugins");
-
+            string pluginZipPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "pluginZip");
             string extraModsPath = Path.Combine(pluginsPath, "1ExtraMods");
-            Directory.CreateDirectory(extraModsPath); // Erstellt den Ordner nur, wenn er fehlt
+            Directory.CreateDirectory(extraModsPath); 
 
 
             await CleanupOldModsAsync(pluginsPath, apiData.dependencies.ToList());
+            await CleanupOldZipsAsync(pluginZipPath, apiData.dependencies.ToList());
 
             bool success = await DownloadAndExtractDependenciesAsync(apiData.dependencies);
 
@@ -86,7 +87,6 @@ namespace ValheimLauncher2.Models.Download
             string baseDirectory = _settings.ValheimInstallPath;
             string bepinexPath = Path.Combine(baseDirectory, "BepInEx");
             string pluginsPath = Path.Combine(bepinexPath, "plugins");
-            // Pfad zum persistenten Cache-Ordner definieren
             string pluginZipPath = Path.Combine(bepinexPath, "pluginZip");
 
             Directory.CreateDirectory(pluginsPath);
@@ -107,12 +107,10 @@ namespace ValheimLauncher2.Models.Download
 
                 try
                 {
-                    // --- START CACHING LOGIC ---
                     string cachedZipPath = Path.Combine(pluginZipPath, $"{dependency}.zip");
                     string downloadUrl = $"https://gcdn.thunderstore.io/live/repository/packages/{dependency}.zip";
                     bool downloadNeeded = true;
 
-                    // HEAD-Request, um die Online-Dateigröße zu bekommen
                     long onlineFileSize = -1;
                     try
                     {
@@ -126,7 +124,7 @@ namespace ValheimLauncher2.Models.Download
                         Debug.WriteLine($"Konnte Online-Dateigröße für {dependency} nicht abrufen: {ex.Message}");
                     }
 
-                    // Vergleiche lokale Dateigröße mit Online-Größe
+
                     if (File.Exists(cachedZipPath) && onlineFileSize > 0)
                     {
                         var localFileInfo = new FileInfo(cachedZipPath);
@@ -137,9 +135,10 @@ namespace ValheimLauncher2.Models.Download
                         }
                     }
 
-                    // Download nur, wenn nötig
+
                     if (downloadNeeded)
                     {
+                        File.Delete(cachedZipPath);
                         _updateStatus($"Lade herunter: {dependency}");
                         using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
                         {
@@ -149,22 +148,19 @@ namespace ValheimLauncher2.Models.Download
                                 await response.Content.CopyToAsync(fileStream);
                             }
                         }
-                    }
-                    // --- END CACHING LOGIC ---
+                    } 
 
-                    // Entpacken aus der (jetzt gecachten) ZIP-Datei
                     string extractPath = isBepInExPack ? baseDirectory : Path.Combine(pluginsPath, dependency);
                     Directory.CreateDirectory(extractPath);
                     using (var archive = ArchiveFactory.Open(cachedZipPath))
                     {
-                        // Wir gehen jede Datei im Archiv einzeln durch
+
                         foreach (var entry in archive.Entries)
                         {
-                            // Wir überspringen alle Dateien, die auf .yaml enden (Groß/Kleinschreibung egal)
-                            // und auch reine Verzeichnis-Einträge.
+
                             if (!entry.IsDirectory && !entry.Key.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase))
                             {
-                                // Nur die erlaubten Dateien werden entpackt.
+
                                 entry.WriteToDirectory(extractPath, new ExtractionOptions { ExtractFullPath = true, Overwrite = true });
                             }
                         }
@@ -181,7 +177,32 @@ namespace ValheimLauncher2.Models.Download
             return allOperationsSuccessful;
         }
 
-        // --- Die restlichen Methoden bleiben unverändert ---
+        private async Task CleanupOldZipsAsync(string pluginZipPath, List<string> expectedDependencies)
+        {
+            _updateStatus("Bereinige alte ZIP-Dateien...");
+            await Task.Run(() =>
+            {
+                if (!Directory.Exists(pluginZipPath)) return;
+                var zipsToKeep = new HashSet<string>(expectedDependencies.Select(dep => $"{dep}.zip"), StringComparer.OrdinalIgnoreCase);
+
+                foreach (var zipFile in Directory.GetFiles(pluginZipPath, "*.zip"))
+                {
+                    var zipName = Path.GetFileName(zipFile);
+                    if (!zipsToKeep.Contains(zipName))
+                    {
+                        try
+                        {
+                            _updateStatus($"Lösche alte ZIP-Datei: {zipName}");
+                            File.Delete(zipFile);
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"Konnte alte ZIP-Datei nicht löschen {zipName}: {ex.Message}");
+                        }
+                    }
+                }
+            });
+        }
 
         private async Task CleanupOldModsAsync(string pluginsPath, List<string> expectedDependencies)
         {

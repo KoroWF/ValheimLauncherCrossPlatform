@@ -12,35 +12,36 @@ namespace ValheimLauncher2.Models.Utils
     {
         public static string GetAppConfigFolderPath()
         {
-            string folderName = "ValheimImmerndar";
-            string configPath;
+            string configBasePath; // Renamed for clarity
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                // Windows: C:\Users\USER\AppData\Local\ValheimImmerndar
-                configPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                // Windows: C:\Users\USER\AppData\Local
+                configBasePath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
-                // Linux: /home/USER/.config/ValheimImmerndar
+                // Linux: /home/USER/.config
                 string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                configPath = Path.Combine(home, ".config");
+                configBasePath = Path.Combine(home, "VIConfig");
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                // macOS: /Users/USER/Library/Application Support/ValheimImmerndar
+                // macOS: /Users/USER/Library/Application Support
                 string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                configPath = Path.Combine(home, "Library", "Application Support");
+                configBasePath = Path.Combine(home, "Library", "Application Support");
             }
             else
             {
-                // Fallback für andere Systeme
-                configPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                // Fallback for other systems
+                configBasePath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             }
 
-            return Path.Combine(configPath, folderName);
-        }
+            // Append the app folder ONCE at the end of the respective base path.
+            string launcherFolderPath = Path.Combine(configBasePath, "ValheimImmerndar");
 
+            return launcherFolderPath;
+        }
         public static bool TryStartSteam()
         {
 
@@ -48,7 +49,7 @@ namespace ValheimLauncher2.Models.Utils
             {
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 {
-                    string? steamPath = GetSteamInstallPath(); // Holt den Ordner
+                    string? steamPath = GetSteamInstallPath(); // Gets the folder
                     if (string.IsNullOrEmpty(steamPath)) return false;
 
                     string steamExePath = Path.Combine(steamPath, "Steam.exe");
@@ -60,13 +61,13 @@ namespace ValheimLauncher2.Models.Utils
                 }
                 else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
                 {
-                    // Unter Linux ist 'steam' normalerweise im Systempfad
+                    // On Linux, 'steam' is usually in the system path
                     Process.Start(new ProcessStartInfo("steam") { UseShellExecute = true });
                     return true;
                 }
                 else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                 {
-                    // Unter macOS ist 'open -a' der Standardweg, um Apps zu starten
+                    // On macOS, 'open -a' is the standard way to start apps
                     Process.Start("open", "-a Steam");
                     return true;
                 }
@@ -83,16 +84,16 @@ namespace ValheimLauncher2.Models.Utils
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                // Gibt das Systemlaufwerk zurück, z.B. "C:\"
+                // Returns the system drive, e.g. "C:\"
                 return Path.GetPathRoot(Environment.SystemDirectory) ?? "C:\\";
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                // Gibt das Home-Verzeichnis des Benutzers zurück (z.B. /home/user oder /Users/user)
+                // Returns the user's home directory (e.g. /home/user or /Users/user)
                 return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             }
 
-            // Ein neutraler Fallback
+            // A neutral fallback
             return "/";
         }
 
@@ -116,13 +117,13 @@ namespace ValheimLauncher2.Models.Utils
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) { return Path.Combine(valheimBasePath, "valheim_Data"); }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) { return Path.Combine(valheimBasePath, "Valheim.app", "Contents", "Resources", "Data"); }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) { return Path.Combine(valheimBasePath, "valheim_Data"); }
-            else { throw new PlatformNotSupportedException("Unbekanntes Betriebssystem erkannt."); }
+            else { throw new PlatformNotSupportedException("Unknown operating system detected."); }
         }
 
-        // DIESE METHODE IST NEU UND ZENTRALISIERT DIE LOGIK
+        // THIS METHOD IS NEW AND CENTRALIZES THE LOGIC
         private static string? FindSteamappsFolderForGame(string valheimInstallPath)
         {
-            // Versuch 1: Die schnelle "Rate"-Methode
+            // Attempt1: The quick "guess" method
             if (valheimInstallPath.Contains(Path.Combine("steamapps", "common"), StringComparison.OrdinalIgnoreCase))
             {
                 try
@@ -130,13 +131,13 @@ namespace ValheimLauncher2.Models.Utils
                     var commonDir = new DirectoryInfo(Path.GetDirectoryName(valheimInstallPath));
                     if (commonDir.Name.Equals("common", StringComparison.OrdinalIgnoreCase) && commonDir.Parent != null)
                     {
-                        return commonDir.Parent.FullName; // Das sollte der steamapps-Ordner sein
+                        return commonDir.Parent.FullName; // This should be the steamapps folder
                     }
                 }
-                catch { /* Ignoriere Fehler, falls Pfad ungültig */ }
+                catch { /* Ignore errors if path is invalid */ }
             }
 
-            // Versuch 2: Die zuverlässige "Lese"-Methode als Fallback
+            // Attempt2: The reliable "read" method as fallback
             var libraryPaths = GetSteamLibraryFolders();
             foreach (var path in libraryPaths)
             {
@@ -146,10 +147,10 @@ namespace ValheimLauncher2.Models.Utils
                 }
             }
 
-            return null; // Kein passender Ordner gefunden
+            return null; // No matching folder found
         }
 
-        // DEINE ALTE GetValheimInstallPath IST JETZT AUFGETEILT UND WIEDERVERWENDBAR
+        // YOUR OLD GetValheimInstallPath IS NOW SPLIT AND REUSABLE
         public static string? GetValheimInstallPath()
         {
             var libraryPaths = GetSteamLibraryFolders();
@@ -171,10 +172,10 @@ namespace ValheimLauncher2.Models.Utils
 
             if (string.IsNullOrEmpty(steamPath)) return libraryPaths;
 
-            // Haupt-Bibliothek hinzufügen
+            // Add main library
             libraryPaths.Add(steamPath);
 
-            // Weitere Bibliotheken aus libraryfolders.vdf lesen
+            // Read additional libraries from libraryfolders.vdf
             string libraryFoldersVdf = Path.Combine(steamPath, "steamapps", "libraryfolders.vdf");
             if (File.Exists(libraryFoldersVdf))
             {
@@ -193,28 +194,28 @@ namespace ValheimLauncher2.Models.Utils
         {
             try
             {
-                // 1. Finde den korrekten Pfad zur boot.config (plattformunabhängig)
+                //1. Find the correct path to boot.config (platform independent)
                 string dataPath = PlatformUtils.GetValheimDataPath(valheimInstallPath);
                 string bootConfigPath = "";
-                // Prüfe, ob der Code auf einem macOS-System läuft
+                // Check if the code is running on a macOS system
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                 {
-                    // macOS-spezifischer Pfad
+                    // macOS-specific path
                     bootConfigPath = Path.Combine(dataPath, "Valheim.app", "Contents", "Resources", "Data", "boot.config");
                 }
                 else
                 {
-                    // Der gemeinsame Pfad für Windows und Linux
+                    // The common path for Windows and Linux
                     bootConfigPath = Path.Combine(dataPath, "valheim_data", "boot.config");
                 }
 
                 if (!File.Exists(bootConfigPath))
                 {
-                    Console.WriteLine($"Fehler: boot.config nicht gefunden unter {bootConfigPath}");
+                    Console.WriteLine($"Error: boot.config not found at {bootConfigPath}");
                     return;
                 }
 
-                // 2. Definiere alle Ziel-Einstellungen in einem Dictionary
+                //2. Define all target settings in a dictionary
                 var targetConfig = new Dictionary<string, string>
                 {
                     ["wait-for-native-debugger"] = "0",
@@ -225,49 +226,49 @@ namespace ValheimLauncher2.Models.Utils
                     ["gfx-enable-native-gfx-jobs"] = "1",
                     ["vr-enabled"] = "0",
                     ["scripting-runtime-version"] = "latest"
-                    // Die Job-Worker-Counts werden dynamisch hinzugefügt
+                    // The job-worker-counts are added dynamically
                 };
 
-                // 3. Ermittle die Anzahl der Prozessorkerne und füge sie zur Konfiguration hinzu
-                // Environment.ProcessorCount gibt die Anzahl der logischen Kerne zurück, was Unity erwartet.
+                //3. Determine the number of processor cores and add them to the configuration
+                // Environment.ProcessorCount returns the number of logical cores, which Unity expects.
                 int coreCount = Environment.ProcessorCount;
                 targetConfig["job-worker-maximum-count"] = coreCount.ToString();
                 targetConfig["job-worker-count"] = coreCount.ToString();
 
-                // 4. Lese die existierende Konfigurationsdatei
+                //4. Read the existing configuration file
                 List<string> lines = File.ReadAllLines(bootConfigPath).ToList();
 
-                // 5. Aktualisiere oder füge jede Zeile aus der Ziel-Konfiguration hinzu
+                //5. Update or add each line from the target configuration
                 foreach (var configEntry in targetConfig)
                 {
                     string key = configEntry.Key;
                     string value = configEntry.Value;
                     string newLine = $"{key}={value}";
 
-                    // Finde den Index der Zeile, die mit unserem Key beginnt
+                    // Find the index of the line that starts with our key
                     int existingLineIndex = lines.FindIndex(line => line.Trim().StartsWith(key + "="));
 
                     if (existingLineIndex != -1)
                     {
-                        // Wenn die Zeile existiert, ersetze sie
+                        // If the line exists, replace it
                         lines[existingLineIndex] = newLine;
-                        Console.WriteLine($"'{key}' aktualisiert auf '{value}'.");
+                        Console.WriteLine($"'{key}' updated to '{value}'.");
                     }
                     else
                     {
-                        // Wenn die Zeile nicht existiert, füge sie hinzu
+                        // If the line does not exist, add it
                         lines.Add(newLine);
-                        Console.WriteLine($"'{key}={value}' hinzugefügt.");
+                        Console.WriteLine($"'{key}={value}' added.");
                     }
                 }
 
-                // 6. Schreibe die aktualisierte Konfiguration zurück in die Datei
+                //6. Write the updated configuration back to the file
                 File.WriteAllLines(bootConfigPath, lines);
-                Console.WriteLine("boot.config wurde erfolgreich für optimale Performance konfiguriert.");
+                Console.WriteLine("boot.config was successfully configured for optimal performance.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Ein Fehler ist beim Bearbeiten der boot.config aufgetreten: {ex.Message}");
+                Console.WriteLine($"An error occurred while editing boot.config: {ex.Message}");
             }
         }
 
@@ -282,7 +283,7 @@ namespace ValheimLauncher2.Models.Utils
                 string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                 string steamRoot = Path.Combine(home, ".local", "share", "Steam");
                 if (Directory.Exists(steamRoot)) return steamRoot;
-                steamRoot = Path.Combine(home, ".steam", "steam"); // Fallback für ältere Installationen
+                steamRoot = Path.Combine(home, ".steam", "steam"); // Fallback for older installations
                 if (Directory.Exists(steamRoot)) return steamRoot;
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
