@@ -1,14 +1,15 @@
-﻿using Avalonia.Threading;
-using HtmlAgilityPack;
-using SharpCompress.Archives;
-using SharpCompress.Common;
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Runtime;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using Avalonia.Threading;
+using HtmlAgilityPack;
+using SharpCompress.Archives;
+using SharpCompress.Common;
 using ValheimLauncher2.Models.PerformanceGame;
 
 namespace ValheimLauncher2.Models.Download
@@ -59,6 +60,7 @@ namespace ValheimLauncher2.Models.Download
 
         private async Task deleteFolder(string baseDirectory)
         {
+            
             string[] foldersToDelete = { "BepInEx/patchers", "BepInEx/config/Azumatt.MinimalUI_Backgrounds", "BepInEx/config/Intermission", "BepInEx/config/Seasonality", "valheim_Data" };
             foreach (string path in foldersToDelete)
             {
@@ -85,10 +87,10 @@ namespace ValheimLauncher2.Models.Download
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                 serverUri = "https://www.immerndar.de/ValheimWithBepInEx/Mac/";
+                serverUri = "https://www.immerndar.de/ValheimWithBepInEx/Mac/";
             }
 
-            if(string.IsNullOrEmpty(serverUri))
+            if (string.IsNullOrEmpty(serverUri))
             {
                 _updateStatusAction("Fehler: Unbekanntes Betriebssystem.");
                 return;
@@ -206,7 +208,7 @@ namespace ValheimLauncher2.Models.Download
                                     }
                                 }
                             }
-                        } 
+                        }
                     }
 
                     await Task.Delay(100);

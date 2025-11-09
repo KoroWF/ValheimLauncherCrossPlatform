@@ -201,6 +201,6 @@
       <Label Content="Vulkan" Margin="-15,0" VerticalAlignment="Center" Foreground="White" FontFamily="/Assets/fonts/Norse.otf#Norse"/>
     </StackPanel>
 
-    <Label Content="Launcher v. 2.0.1" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,220,115" Foreground="#FFBFBFBF" FontSize="10"/>
+    <Label Content="Launcher v. 2.0.2" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,220,115" Foreground="#FFBFBFBF" FontSize="10"/>
   </Grid>
 </UserControl>

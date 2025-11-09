@@ -1,6 +1,5 @@
-﻿using Avalonia.Controls;
-using Avalonia.Interactivity;
-using System.Threading.Tasks;
+﻿using System.Threading.Tasks;
+using Avalonia.Controls;
 
 namespace ValheimCrossPlatformLauncher
 {

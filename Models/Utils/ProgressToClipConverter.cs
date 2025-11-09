@@ -1,10 +1,10 @@
-﻿using Avalonia;
-using Avalonia.Data.Converters;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
+using Avalonia;
+using Avalonia.Data.Converters;
 
-namespace ValheimLauncherCrossPlatform.Models.Utils 
+namespace ValheimLauncherCrossPlatform.Models.Utils
 {
     public class ProgressToClipConverter : IMultiValueConverter
     {

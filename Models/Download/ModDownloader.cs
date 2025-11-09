@@ -1,7 +1,4 @@
-﻿using Newtonsoft.Json.Linq;
-using SharpCompress.Archives;
-using SharpCompress.Common;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -9,6 +6,9 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
+using SharpCompress.Archives;
+using SharpCompress.Common;
 using ValheimLauncher2.Models.Settings;
 
 namespace ValheimLauncher2.Models.Download
@@ -60,11 +60,14 @@ namespace ValheimLauncher2.Models.Download
             string pluginsPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "plugins");
             string pluginZipPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "pluginZip");
             string extraModsPath = Path.Combine(pluginsPath, "1ExtraMods");
-            Directory.CreateDirectory(extraModsPath); 
+            Directory.CreateDirectory(extraModsPath);
 
 
             await CleanupOldModsAsync(pluginsPath, apiData.dependencies.ToList());
             await CleanupOldZipsAsync(pluginZipPath, apiData.dependencies.ToList());
+
+
+            await WaitForDirectoryCleanup(pluginsPath, apiData.dependencies.Concat(new[] { "1ExtraMods", "MMHOOK", "HappyDragoon-DragoonCapes" }));
 
             bool success = await DownloadAndExtractDependenciesAsync(apiData.dependencies);
 
@@ -148,7 +151,7 @@ namespace ValheimLauncher2.Models.Download
                                 await response.Content.CopyToAsync(fileStream);
                             }
                         }
-                    } 
+                    }
 
                     string extractPath = isBepInExPack ? baseDirectory : Path.Combine(pluginsPath, dependency);
                     Directory.CreateDirectory(extractPath);
@@ -214,7 +217,7 @@ namespace ValheimLauncher2.Models.Download
                 foldersToKeep.Add("1ExtraMods");
                 foldersToKeep.Add("MMHOOK");
                 foldersToKeep.Add("HappyDragoon-DragoonCapes");
-            foreach (var dirPath in Directory.GetDirectories(pluginsPath))
+                foreach (var dirPath in Directory.GetDirectories(pluginsPath))
                 {
                     var dirName = new DirectoryInfo(dirPath).Name;
                     if (!foldersToKeep.Contains(dirName))
@@ -249,7 +252,7 @@ namespace ValheimLauncher2.Models.Download
                 }
                 catch (Exception ex)
                 {
-                    _updateStatus($"Fehler bei BepInEx-Installation: {ex.Message}");
+                    _updateStatus($"Fehler bei BepInEx-MOD-Installation: {ex.Message}");
                     Debug.WriteLine(ex);
                 }
             }
@@ -285,6 +288,21 @@ namespace ValheimLauncher2.Models.Download
             {
                 Debug.WriteLine($"Error fetching Thunderstore API data: {ex.Message}");
                 return (null, null, null);
+            }
+        }
+
+        private async Task WaitForDirectoryCleanup(string path, IEnumerable<string> expectedFolders)
+        {
+            int retries = 10;
+            while (retries-- > 0)
+            {
+                var remaining = Directory.GetDirectories(path)
+                    .Select(d => new DirectoryInfo(d).Name)
+                    .Except(expectedFolders, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (!remaining.Any())
+                    break;
+                await Task.Delay(200);
             }
         }
     }
