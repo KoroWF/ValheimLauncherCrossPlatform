@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -90,7 +91,7 @@ namespace ValheimLauncher2.Models.Download
             Directory.CreateDirectory(extraModsPath);
 
 
-            await CleanupOldModsAsync(pluginsPath, apiData.dependencies.ToList());
+            await CleanupOldModsAsync(pluginsPath);
             await CleanupOldZipsAsync(pluginZipPath, apiData.dependencies.ToList());
 
 
@@ -173,7 +174,7 @@ namespace ValheimLauncher2.Models.Download
                     if (downloadNeeded)
                     {
                         File.Delete(cachedZipPath);
-                        // Hole Dateigröße
+
                         long fileSize =0;
                         using (var headResp = await _httpClient.SendAsync(new HttpRequestMessage(HttpMethod.Head, downloadUrl)))
                         {
@@ -214,33 +215,121 @@ namespace ValheimLauncher2.Models.Download
                         }
  
                     }
-
-                    string extractPath = isBepInExPack ? baseDirectory : Path.Combine(pluginsPath, dependency);
-                    Directory.CreateDirectory(extractPath);
-                    using (var archive = ArchiveFactory.Open(cachedZipPath))
-                    {
-                        foreach (var entry in archive.Entries)
-                        {
-                            if (!entry.IsDirectory && !entry.Key.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase))
-                            {
-
-                                entry.WriteToDirectory(extractPath, new ExtractionOptions { ExtractFullPath = true, Overwrite = true });
-                            }
-                        }
-                    }
-
                 }
                 catch (Exception ex)
                 {
                     _updateStatus($"Error with {dependency}. Maybe in use!");
-                    await MessageBox.Show(_parentWindow, $"Error with {dependency}. Maybe in use!");
+                    await MessageBox.Show(_parentWindow, $"Error with {dependency} on download!");
                     allOperationsSuccessful = false;
                 }
+
+                ExtractToPlugins(dependency, pluginZipPath);
+
+
+
 
             }
 
             _updateSpeed?.Invoke(""); 
             return allOperationsSuccessful;
+        }
+
+        /// <summary>
+        /// Extract data from zip files, but only those who we need.
+        /// </summary>
+        private void ExtractToPlugins(string dependency, string pluginZipPath)
+        {
+            try
+            {
+                string baseDirectory = _settings.ValheimInstallPath;
+                string bepinexPath = Path.Combine(baseDirectory, "BepInEx");
+                string pluginsPath = Path.Combine(bepinexPath, "plugins");
+
+                bool isBepInExPack = dependency.Contains("denikson-BepInExPack_Valheim", StringComparison.OrdinalIgnoreCase);
+
+                string cachedZipPath = Path.Combine(pluginZipPath, $"{dependency}.zip");
+                string extractPath = isBepInExPack ? baseDirectory : Path.Combine(pluginsPath, dependency);
+                Directory.CreateDirectory(extractPath);
+
+                using (var archive = ArchiveFactory.Open(cachedZipPath))
+                {
+                    foreach (var entry in archive.Entries)
+                    {
+                        string entryKey = entry.Key; 
+                        var notAllowed = new HashSet<string> { "CHANGELOG.md", "icon.png", "manifest.json", "README.md", "LICENSE.md" };
+
+                        if (entryKey.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string tempInnerZipPath = Path.Combine(Path.GetTempPath(), $"temp_inner_{Guid.NewGuid()}.zip");
+                            try
+                            {
+
+                                entry.WriteToFile(tempInnerZipPath, new ExtractionOptions { Overwrite = true });
+
+
+                                ExtractInnerZipContents(tempInnerZipPath, extractPath, dependency);
+                            }
+                            finally
+                            {
+
+                                if (File.Exists(tempInnerZipPath))
+                                {
+                                    File.Delete(tempInnerZipPath);
+                                }
+                            }
+                        }
+                        else if (!notAllowed.Contains(entry.Key))
+                        {
+
+                            entry.WriteToDirectory(extractPath, new ExtractionOptions { ExtractFullPath = true, Overwrite = true });
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _updateStatus($"Error extracting {dependency}: {ex.Message}");
+                MessageBox.Show(_parentWindow, $"Error extracting {dependency}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Helps out for Zipfiles in Zipfiles to get the language yml files.
+        /// </summary>
+        private void ExtractInnerZipContents(string innerZipPath, string extractPath, string originalDependency)
+        {
+            using (var innerArchive = ArchiveFactory.Open(innerZipPath))
+            {
+                foreach (var innerEntry in innerArchive.Entries)
+                {
+                    string innerEntryKey = innerEntry.Key;
+                    string innerExtension = Path.GetExtension(innerEntryKey).ToLowerInvariant();
+                    var allowedExtensions = new HashSet<string> { ".dll", ".yaml", ".yml", ".json", ".db", ".mdb", ".xml" };
+
+                    if (innerEntryKey.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                    {
+
+                        string tempDeeperZipPath = Path.Combine(Path.GetTempPath(), $"temp_deeper_{Guid.NewGuid()}.zip");
+                        try
+                        {
+                            innerEntry.WriteToFile(tempDeeperZipPath, new ExtractionOptions { Overwrite = true });
+                            ExtractInnerZipContents(tempDeeperZipPath, extractPath, originalDependency);
+                        }
+                        finally
+                        {
+                            if (File.Exists(tempDeeperZipPath))
+                            {
+                                File.Delete(tempDeeperZipPath);
+                            }
+                        }
+                    }
+                    else if (allowedExtensions.Contains(innerExtension) && !innerEntryKey.Contains("manifest.json"))
+                    {
+
+                        innerEntry.WriteToDirectory(extractPath, new ExtractionOptions { ExtractFullPath = false, Overwrite = true });
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -268,7 +357,7 @@ namespace ValheimLauncher2.Models.Download
                         }
                         catch (Exception ex)
                         {
-                            Debug.WriteLine($"Could not delete old ZIP file {zipName}: {ex.Message}");
+                            _updateStatus($"Could not delete old ZIP file {zipName}: {ex.Message}");
                         }
                     }
                 }
@@ -280,13 +369,14 @@ namespace ValheimLauncher2.Models.Download
         /// </summary>
         /// <param name="pluginsPath">The path to the plugins directory.</param>
         /// <param name="expectedDependencies">The list of expected dependencies.</param>
-        private async Task CleanupOldModsAsync(string pluginsPath, List<string> expectedDependencies)
+        private async Task CleanupOldModsAsync(string pluginsPath)
         {
             _updateStatus("Cleaning up old mod folders...");
             await Task.Run(() =>
             {
                 if (!Directory.Exists(pluginsPath)) return;
-                var foldersToKeep = new HashSet<string>(expectedDependencies, StringComparer.OrdinalIgnoreCase);
+
+                var foldersToKeep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foldersToKeep.Add("1ExtraMods");
                 foldersToKeep.Add("MMHOOK");
                 foldersToKeep.Add("HappyDragoon-DragoonCapes");
@@ -302,7 +392,7 @@ namespace ValheimLauncher2.Models.Download
                         }
                         catch (Exception ex)
                         {
-                            Debug.WriteLine($"Could not delete old mod folder {dirName}: {ex.Message}");
+                            _updateStatus($"Could not delete old mod folder {dirName}: {ex.Message}");
                         }
                     }
                 }

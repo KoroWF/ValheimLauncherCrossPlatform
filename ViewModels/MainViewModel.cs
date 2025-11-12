@@ -541,12 +541,7 @@ namespace ValheimLauncher2.ViewModels
 
             if (needsUpdate)
             {
-                IsBusy = true; 
-                IsGameInstalled = false; 
-                await _modDownloader.ForceUpdateModpackAsync();
-                LocalModpackVersion = "v. " + (currentSettings.Modpack?.CurrentLocalVersion ?? "-");
-                Checkstatus(); 
-                IsBusy = false;
+               await ManualModUpdate();
             }
         }
 

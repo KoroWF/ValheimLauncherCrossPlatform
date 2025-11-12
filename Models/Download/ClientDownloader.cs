@@ -276,12 +276,15 @@ namespace ValheimLauncher2.Models.Download
                         }
                     }
 
+                    _updateSpeedAction?.Invoke("");
+
                     await Task.Delay(100);
 
                     if (Path.GetExtension(localPath).Equals(".zip", StringComparison.OrdinalIgnoreCase))
                     {
                         ExtractAndMoveZip(localPath);
                     }
+
                 }
                 catch (Exception ex)
                 {
