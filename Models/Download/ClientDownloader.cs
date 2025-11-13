@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Runtime;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Avalonia.Threading;
@@ -163,7 +162,7 @@ namespace ValheimLauncher2.Models.Download
             }
 
             Dispatcher.UIThread.Invoke(() => _updateProgressAction(100));
-            _updateSpeedAction?.Invoke(""); 
+            _updateSpeedAction?.Invoke("");
         }
 
         /// <summary>

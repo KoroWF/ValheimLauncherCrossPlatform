@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Runtime;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Avalonia.Controls;
@@ -88,7 +87,7 @@ namespace ValheimLauncher2.ViewModels
             }
             settingsFilePath = Path.Combine(launcherFolderPath, SettingsFileName);
 
-            LoadSettings(); 
+            LoadSettings();
 
             _clientDownloader = new ClientDownloader(
             status => StatusText = status,
@@ -213,7 +212,7 @@ namespace ValheimLauncher2.ViewModels
                     StatusText = "Steam wird gestartet...";
                     if (!PlatformUtils.TryStartSteam())
                     {
-                        
+
                         return;
                     }
                     System.Threading.Thread.Sleep(5000);
@@ -222,8 +221,8 @@ namespace ValheimLauncher2.ViewModels
 
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 {
-                        string exePath = Path.Combine(currentSettings.ValheimInstallPath, "valheim.exe");
-                        Process.Start(new ProcessStartInfo(exePath) { Arguments = launchArgs, UseShellExecute = true });
+                    string exePath = Path.Combine(currentSettings.ValheimInstallPath, "valheim.exe");
+                    Process.Start(new ProcessStartInfo(exePath) { Arguments = launchArgs, UseShellExecute = true });
 
                 }
 
@@ -255,7 +254,7 @@ namespace ValheimLauncher2.ViewModels
                     try
                     {
 
-                        string command = $"\"{scriptPath}\""; 
+                        string command = $"\"{scriptPath}\"";
 
 
                         var terminalCandidates = new List<(string Name, string Arguments)>
@@ -280,7 +279,7 @@ namespace ValheimLauncher2.ViewModels
                                 var checkProcess = new ProcessStartInfo
                                 {
                                     FileName = "which",
-                                    Arguments = candidate.Name.Split(' ')[0], 
+                                    Arguments = candidate.Name.Split(' ')[0],
                                     RedirectStandardOutput = true,
                                     UseShellExecute = false,
                                     CreateNoWindow = true
@@ -307,13 +306,13 @@ namespace ValheimLauncher2.ViewModels
 
                         if (terminal == null)
                         {
-                           
+
                             StatusText = "Fehler: Kein Terminal-Emulator (ptyxis, gnome-terminal, konsole, xterm etc.) gefunden!";
                             IsBusy = false;
                             return;
                         }
 
-                      
+
                         var processInfo = new ProcessStartInfo
                         {
                             FileName = terminal,
@@ -328,21 +327,21 @@ namespace ValheimLauncher2.ViewModels
                         }
                         catch (Exception ex)
                         {
-                           
+
                             StatusText = $"Fehler beim Starten des Spiels: {ex.Message}";
                             IsBusy = false;
                         }
                     }
                     catch (Exception ex)
                     {
-                        
+
                         StatusText = $"Fehler beim Starten des Spiels: {ex.Message}";
                         IsBusy = false;
                     }
                 }
                 else
                 {
-                    
+
                     Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
          {
              StatusText = "Fehler: start_game_bepinex.sh nicht gefunden!";
@@ -407,7 +406,7 @@ namespace ValheimLauncher2.ViewModels
 
             if (result == ConfirmDialog.DialogResult.Yes)
             {
-             
+
                 string? initialDirectory = PlatformUtils.GetDefaultSystemPath();
 
                 var dialog = new OpenFolderDialog
@@ -453,14 +452,14 @@ namespace ValheimLauncher2.ViewModels
                 }
                 finally
                 {
-                    
+
                     IsBusy = false;
                 }
             }
             else
             {
-                    IsBusy = false;
-                    return;
+                IsBusy = false;
+                return;
             }
         }
 
@@ -541,7 +540,7 @@ namespace ValheimLauncher2.ViewModels
 
             if (needsUpdate)
             {
-               await ManualModUpdate();
+                await ManualModUpdate();
             }
         }
 
@@ -636,8 +635,8 @@ namespace ValheimLauncher2.ViewModels
                         File.Copy(file, file.Replace(sourceDir, destinationDir), true);
                     }
 
-                        StatusText = "Räume alte Daten auf...";
-                        Directory.Delete(sourceDir, true);
+                    StatusText = "Räume alte Daten auf...";
+                    Directory.Delete(sourceDir, true);
 
                 }
                 catch (Exception ex)
@@ -677,6 +676,8 @@ namespace ValheimLauncher2.ViewModels
         [RelayCommand]
         private void CloseApplication()
         {
+            _modDownloader.CancelOperations();
+            Task.Delay(2000);
             _parentWindow?.Close();
         }
     }

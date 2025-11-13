@@ -29,4 +29,4 @@ namespace ValheimLauncher2.Views
             this.BeginMoveDrag(e);
         }
     }
-}   
+}
