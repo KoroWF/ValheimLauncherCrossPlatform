@@ -11,6 +11,7 @@ using HtmlAgilityPack;
 using SharpCompress.Archives;
 using SharpCompress.Common;
 using ValheimLauncher2.Models.PerformanceGame;
+using ValheimLauncher2.Models.Utils;
 
 namespace ValheimLauncher2.Models.Download
 {
@@ -20,7 +21,7 @@ namespace ValheimLauncher2.Models.Download
     public class ClientDownloader
     {
         private static readonly HttpClient _httpClient = new HttpClient();
-        private readonly Action<string> _updateStatusAction;
+        private readonly Action<string> _updateStatus;
         private readonly Action<double> _updateProgressAction;
         private readonly Action<string> _updateSpeedAction;
         private long _totalBytesDownloaded;
@@ -33,7 +34,7 @@ namespace ValheimLauncher2.Models.Download
         /// <param name="updateSpeed">Action to update the download speed.</param>
         public ClientDownloader(Action<string> updateStatus, Action<double> updateProgress, Action<string> updateSpeed)
         {
-            _updateStatusAction = updateStatus;
+            _updateStatus = updateStatus;
             _updateProgressAction = updateProgress;
             _updateSpeedAction = updateSpeed;
         }
@@ -44,20 +45,24 @@ namespace ValheimLauncher2.Models.Download
         /// <param name="installPath">The installation directory path.</param>
         public async Task InstallGameAsync(string installPath)
         {
-            // Immer sicherstellen, dass im VImmerndar-Ordner installiert wird
+            if (IsValheimRunning())
+            {
+                _updateStatus("Valheim läuft noch! Bitte schließe das Spiel zuerst.");
+                return;
+            }
+
             if (!installPath.EndsWith("VImmerndar", StringComparison.OrdinalIgnoreCase))
                 installPath = Path.Combine(installPath, "VImmerndar");
 
             try
             {
-                _updateStatusAction("Installiere das Hauptspiel...");
+                _updateStatus("Installiere das Hauptspiel...");
                 await Installer(installPath);
-                _updateStatusAction("Das Hauptspiel wurde fertig geladen.");
+                _updateStatus("Das Hauptspiel wurde fertig geladen.");
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"FATALER FEHLER in InstallGameAsync: {ex}");
-                _updateStatusAction($"Fehler bei der Installation: {ex.Message}");
+                _updateStatus($"Fehler bei der Installation: {ex.Message}");
             }
         }
 
@@ -67,20 +72,27 @@ namespace ValheimLauncher2.Models.Download
         /// <param name="installPath">The installation directory path.</param>
         public async Task FixValheimAsync(string installPath)
         {
+            if (IsValheimRunning())
+            {
+                _updateStatus("Valheim läuft noch! Bitte schließe das Spiel zuerst.");
+                return;
+            }
+
+
             if (!installPath.EndsWith("VImmerndar", StringComparison.OrdinalIgnoreCase))
                 installPath = Path.Combine(installPath, "VImmerndar");
 
             try
             {
-                _updateStatusAction("Überprüfe vorhandene Daten auf Fehler!");
+                _updateStatus("Überprüfe vorhandene Daten auf Fehler!");
                 await DeleteFolder(installPath);
                 await Installer(installPath);
-                _updateStatusAction("Überprüfung beendet, bereit zum Starten!");
+                _updateStatus("Überprüfung beendet, bereit zum Starten!");
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"FATALER FEHLER in FixValheimAsync: {ex}");
-                _updateStatusAction($"Fehler bei der Reparatur: {ex.Message}");
+                _updateStatus($"Fehler bei der Reparatur: {ex.Message}");
             }
         }
 
@@ -105,12 +117,32 @@ namespace ValheimLauncher2.Models.Download
             return Task.CompletedTask;
         }
 
+        public bool IsValheimRunning()
+        {
+
+            var processNames = new[] { "valheim", "valheim.exe" };
+
+            foreach (var name in processNames)
+            {
+                var processes = Process.GetProcessesByName(
+                    Path.GetFileNameWithoutExtension(name)
+                );
+
+                if (processes.Length > 0)
+                    return true;
+            }
+
+            return false;
+        }
+
         /// <summary>
         /// Downloads and installs the Valheim game client to the specified path.
         /// </summary>
         /// <param name="installPath">The installation directory path.</param>
         public async Task Installer(string installPath)
         {
+
+
             string serverUri = string.Empty;
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -128,37 +160,48 @@ namespace ValheimLauncher2.Models.Download
 
             if (string.IsNullOrEmpty(serverUri))
             {
-                _updateStatusAction("Fehler: Unbekanntes Betriebssystem.");
+                _updateStatus("Fehler: Unbekanntes Betriebssystem.");
                 return;
             }
 
-            _updateStatusAction("Lade Spieldateien herunter...");
+            _updateStatus("Lade Spieldateien herunter...");
             Dispatcher.UIThread.Invoke(() => _updateProgressAction(0.0));
             _totalBytesDownloaded = 0L;
 
             try
             {
                 string zipFilePath = Path.Combine(installPath, "ValheimWithBepInEx.zip");
-                if (File.Exists(zipFilePath)) File.Delete(zipFilePath);
+                if (File.Exists(zipFilePath))
+                {
+                    bool deletedConfirmed = await ModDownloader.WaitForFileDeletionAsync(
+                     zipFilePath,
+                     TimeSpan.FromSeconds(10)
+                 );
 
+
+                    if (!deletedConfirmed)
+                    {
+                        _updateStatus("Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
+                    }
+                }
                 long totalSize = await GetTotalSizeFromServer(_httpClient);
                 await DownloadDirectoryAsync(_httpClient, serverUri, installPath, totalSize);
             }
             catch (Exception ex)
             {
-                _updateStatusAction($"Fehler beim Download: {ex.Message}");
+                _updateStatus($"Fehler beim Download: {ex.Message}");
                 throw;
             }
 
             try
             {
-                _updateStatusAction("Optimiere Start-Konfiguration...");
+                _updateStatus("Optimiere Start-Konfiguration...");
                 var configModifier = new BootConfigModifier(installPath);
                 configModifier.ApplyPerformanceSettings();
             }
             catch (Exception ex)
             {
-                _updateStatusAction($"Fehler bei boot.config Optimierung: {ex.Message}");
+                _updateStatus($"Fehler bei boot.config Optimierung: {ex.Message}");
             }
 
             Dispatcher.UIThread.Invoke(() => _updateProgressAction(100));
@@ -177,12 +220,12 @@ namespace ValheimLauncher2.Models.Download
             {
                 string sizeString = await httpClient.GetStringAsync(requestUri);
                 if (long.TryParse(sizeString, out var result)) return result;
-                _updateStatusAction("Fehler: Konnte Gesamtgröße nicht lesen.");
+                _updateStatus("Fehler: Konnte Gesamtgröße nicht lesen.");
                 return 0L;
             }
             catch (Exception ex)
             {
-                _updateStatusAction($"Fehler beim Abrufen der Dateigröße: {ex.Message}");
+                _updateStatus($"Fehler beim Abrufen der Dateigröße: {ex.Message}");
                 return 0L;
             }
         }
@@ -206,7 +249,7 @@ namespace ValheimLauncher2.Models.Download
 
             if (filesToDownload == null || !filesToDownload.Any())
             {
-                _updateStatusAction("Keine Dateien zum Herunterladen gefunden.");
+                _updateStatus("Keine Dateien zum Herunterladen gefunden.");
                 return;
             }
 
@@ -236,7 +279,7 @@ namespace ValheimLauncher2.Models.Download
                     {
                         response.EnsureSuccessStatusCode();
 
-                        _updateStatusAction($"Lade herunter: {Path.GetFileName(localPath)}");
+                        _updateStatus($"Lade herunter: {Path.GetFileName(localPath)}");
                         Directory.CreateDirectory(Path.GetDirectoryName(localPath));
 
                         using (var fileStream = new FileStream(localPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
@@ -281,13 +324,13 @@ namespace ValheimLauncher2.Models.Download
 
                     if (Path.GetExtension(localPath).Equals(".zip", StringComparison.OrdinalIgnoreCase))
                     {
-                        ExtractAndMoveZip(localPath);
+                        await ExtractAndMoveZip(localPath);
                     }
 
                 }
                 catch (Exception ex)
                 {
-                    _updateStatusAction($"Fehler beim Herunterladen von {Path.GetFileName(localPath)}: {ex.Message}");
+                    _updateStatus($"Fehler beim Herunterladen von {Path.GetFileName(localPath)}: {ex.Message}");
                     throw;
                 }
             }
@@ -297,9 +340,9 @@ namespace ValheimLauncher2.Models.Download
         /// Extracts the specified zip file and moves its contents to the target directory.
         /// </summary>
         /// <param name="zipFilePath">The path to the zip file.</param>
-        private void ExtractAndMoveZip(string zipFilePath)
+        private async Task ExtractAndMoveZip(string zipFilePath)
         {
-            _updateStatusAction("Extrahiere Spieldateien...");
+            _updateStatus("Extrahiere Spieldateien...");
             string tempDir = Path.Combine(Path.GetDirectoryName(zipFilePath), "ValheimWithBepInExTemp");
             try
             {
@@ -311,15 +354,26 @@ namespace ValheimLauncher2.Models.Download
                         entry.WriteToDirectory(tempDir, new ExtractionOptions { ExtractFullPath = true, Overwrite = true });
                     }
                 }
-                _updateStatusAction("Verschiebe extrahierte Daten...");
+                _updateStatus("Verschiebe extrahierte Daten...");
                 MergeDirectory(tempDir, Path.GetDirectoryName(zipFilePath));
-                _updateStatusAction("Räume auf...");
+                _updateStatus("Räume auf...");
                 Directory.Delete(tempDir, recursive: true);
-                File.Delete(zipFilePath);
+
+                bool deletedConfirmed = await ModDownloader.WaitForFileDeletionAsync(
+                    zipFilePath,
+                    TimeSpan.FromSeconds(10)
+
+                );
+
+
+                if (!deletedConfirmed)
+                {
+                    _updateStatus("Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
+                }
             }
             catch (Exception ex)
             {
-                _updateStatusAction($"Fehler beim Entpacken oder Verschieben: {ex.Message}");
+                _updateStatus($"Fehler beim Entpacken oder Verschieben: {ex.Message}");
                 throw;
             }
         }

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -13,6 +14,7 @@ using SharpCompress.Archives;
 using SharpCompress.Common;
 using ValheimCrossPlatformLauncher;
 using ValheimLauncher2.Models.Settings;
+using ValheimLauncher2.Models.Utils;
 using File = System.IO.File;
 
 namespace ValheimLauncher2.Models.Download
@@ -49,7 +51,7 @@ namespace ValheimLauncher2.Models.Download
             _saveSettings = saveSettings;
             _showError = showError;
         }
-        private CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
+        internal CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
 
         public void CancelOperations()
         {
@@ -77,44 +79,72 @@ namespace ValheimLauncher2.Models.Download
             return (apiData.versionNumber, needsUpdate);
         }
 
+        public bool IsValheimRunningMod()
+        {
+
+            var processNames = new[] { "valheim", "valheim.exe" };
+
+            foreach (var name in processNames)
+            {
+                var processes = Process.GetProcessesByName(
+                    Path.GetFileNameWithoutExtension(name)
+                );
+
+                if (processes.Length > 0)
+                    return true;
+            }
+
+            return false;
+        }
+
         /// <summary>
         /// Forces an update of the modpack, downloading and installing all dependencies.
         /// </summary>
         public async Task ForceUpdateModpackAsync()
         {
-            _updateStatus("Starting mod update...");
-            var apiData = await GetThunderstoreApiData("ImmernDarNew/ImmernDarNew_Modpack");
-            //var apiData = await GetThunderstoreApiData("TeamKoro/Mithrael_Modpack");
-            if (apiData.dependencies == null)
+
+            if (IsValheimRunningMod())
             {
-                _updateStatus("Error: Could not retrieve modpack dependencies.");
+                _updateStatus("Valheim läuft noch! Bitte schließe das Spiel zuerst.");
                 return;
             }
 
-            _settings.Modpack.ExpectedModFiles = new List<string>(apiData.dependencies);
-            string pluginsPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "plugins");
-            string pluginZipPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "pluginZip");
-            string extraModsPath = Path.Combine(pluginsPath, "1ExtraMods");
-            Directory.CreateDirectory(extraModsPath);
+            _updateStatus("Starting mod update...");
 
-            _updateStatus($"Räume auf...");
-            await CleanupOldModsAsync(pluginsPath);
-            await CleanupOldZipsAsync(pluginZipPath, apiData.dependencies.ToList());
+                var apiData = await GetThunderstoreApiData("ImmernDarNew/ImmernDarNew_Modpack");
+                //var apiData = await GetThunderstoreApiData("TeamKoro/Mithrael_Modpack"); //for testing
 
-            bool success = await DownloadAndExtractDependenciesAsync(apiData.dependencies);
+                if (apiData.dependencies == null)
+                {
+                    _updateStatus("Error: Could not retrieve modpack dependencies.");
+                    return;
+                }
 
-            if (success)
-            {
-                await InstallBepInExCoreAsync();
+                _settings.Modpack.ExpectedModFiles = new List<string>(apiData.dependencies);
+                string pluginsPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "plugins");
+                string pluginZipPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "pluginZip");
+                string extraModsPath = Path.Combine(pluginsPath, "1ExtraMods");
+                Directory.CreateDirectory(extraModsPath);
 
-                _settings.Modpack.CurrentLocalVersion = apiData.versionNumber;
-                _saveSettings();
-                _updateStatus("Modpack updated!");
-            }
-            else
-            {
-                _updateStatus("Mod Update hatte Fehler.");
-            }
+                _updateStatus($"Räume auf...");
+                await CleanupOldModsAsync(pluginsPath);
+                await CleanupOldZipsAsync(pluginZipPath, apiData.dependencies.ToList());
+
+                bool success = await DownloadAndExtractDependenciesAsync(apiData.dependencies);
+
+                if (success)
+                {
+                    await InstallBepInExCoreAsync();
+
+                    _settings.Modpack.CurrentLocalVersion = apiData.versionNumber;
+                    _saveSettings();
+                    _updateStatus("Modpack updated!");
+                }
+                else
+                {
+                    _updateStatus("Mod Update hatte Fehler.");
+                }
+
         }
 
         /// <summary>
@@ -165,22 +195,35 @@ namespace ValheimLauncher2.Models.Download
                     allOperationsSuccessful = false;
                 }
 
-                if (File.Exists(cachedZipPath))
+                try
                 {
-                    if (IsZipValid(cachedZipPath, onlineFileSize))
+                    if (File.Exists(cachedZipPath))
                     {
-                        downloadNeeded = false;
-                    }
-                    else
-                    {
+                        if (IsZipValid(cachedZipPath, onlineFileSize))
+                        {
+                            downloadNeeded = false;
+                        }
+                        else
+                        {
 
-                        _updateStatus($"Lösche alte Zip-Datei: {dependency}");
-                        await Task.Delay(1000);
-                        await DeleteFileWithRetryAsync(cachedZipPath);
-                        await Task.Delay(1000);
-                        downloadNeeded = true;
-                    }
 
+                            _updateStatus($"Lösche korrupte Zip-Datei: {dependency}");
+
+                            bool deletedConfirmed = await WaitForFileDeletionAsync(
+                                 cachedZipPath,
+                                 TimeSpan.FromSeconds(10),
+                                 _cancellationTokenSource.Token
+                             );
+
+                            downloadNeeded = true;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _updateStatus($"Warnung zu {dependency}: {ex.Message}");
+                    await MessageBox.Show(_parentWindow, $"Konnte alte Zip-Datei nicht löschen: {ex.Message}");
+                    allOperationsSuccessful = false;
                 }
 
                 if (downloadNeeded)
@@ -262,14 +305,14 @@ namespace ValheimLauncher2.Models.Download
                     {
                         await MessageBox.Show(_parentWindow, $"Download-Fehler für {dependency}. Siehe Log für Details.");
                     }
-
+                    _updateStatus("Überprüfe Mods...");
+                    _updateSpeed?.Invoke("");
                 }
 
 
 
 
-                _updateSpeed?.Invoke("");
-                ExtractToPlugins(dependency, pluginZipPath);
+                await ExtractToPlugins(dependency, pluginZipPath);
             }
 
             return allOperationsSuccessful;
@@ -279,7 +322,7 @@ namespace ValheimLauncher2.Models.Download
         /// <summary>
         /// Extract data from zip files, but only those who we need.
         /// </summary>
-        private void ExtractToPlugins(string dependency, string pluginZipPath)
+        private async Task ExtractToPlugins(string dependency, string pluginZipPath)
         {
             try
             {
@@ -309,14 +352,24 @@ namespace ValheimLauncher2.Models.Download
                                 entry.WriteToFile(tempInnerZipPath, new ExtractionOptions { Overwrite = true });
 
 
-                                ExtractInnerZipContents(tempInnerZipPath, extractPath, dependency);
+                                await ExtractInnerZipContents(tempInnerZipPath, extractPath, dependency);
                             }
                             finally
                             {
 
                                 if (File.Exists(tempInnerZipPath))
                                 {
-                                    File.Delete(tempInnerZipPath);
+                                    bool deletedConfirmed = await WaitForFileDeletionAsync(
+                                         tempInnerZipPath,
+                                         TimeSpan.FromSeconds(10),
+                                         _cancellationTokenSource.Token
+                                     );
+
+                                    if (!deletedConfirmed)
+                                    {
+                                        _updateStatus("Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
+                                        await MessageBox.Show(_parentWindow, $"Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
+                                    }
                                 }
                             }
                         }
@@ -338,7 +391,7 @@ namespace ValheimLauncher2.Models.Download
         /// <summary>
         /// Helps out for Zipfiles in Zipfiles to get the language yml files.
         /// </summary>
-        private void ExtractInnerZipContents(string innerZipPath, string extractPath, string originalDependency)
+        private async Task ExtractInnerZipContents(string innerZipPath, string extractPath, string originalDependency)
         {
             using (var innerArchive = ArchiveFactory.Open(innerZipPath))
             {
@@ -355,13 +408,23 @@ namespace ValheimLauncher2.Models.Download
                         try
                         {
                             innerEntry.WriteToFile(tempDeeperZipPath, new ExtractionOptions { Overwrite = true });
-                            ExtractInnerZipContents(tempDeeperZipPath, extractPath, originalDependency);
+                            await ExtractInnerZipContents(tempDeeperZipPath, extractPath, originalDependency);
                         }
                         finally
                         {
                             if (File.Exists(tempDeeperZipPath))
                             {
-                                Task.Run(() => DeleteFileWithRetryAsync(tempDeeperZipPath)).Wait();
+                                bool deletedConfirmed = await WaitForFileDeletionAsync(
+                                    tempDeeperZipPath,
+                                    TimeSpan.FromSeconds(10)
+
+                                );
+
+                                if (!deletedConfirmed)
+                                {
+                                    _updateStatus("Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
+                                    await MessageBox.Show(_parentWindow, $"Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
+                                }
                             }
                         }
                     }
@@ -398,9 +461,17 @@ namespace ValheimLauncher2.Models.Download
                         var zipName = Path.GetFileName(zipFile);
                         if (!zipsToKeep.Contains(zipName))
                         {
+                            bool deletedConfirmed = await WaitForFileDeletionAsync(
+                                 zipFile,
+                                 TimeSpan.FromSeconds(10),
+                                 _cancellationTokenSource.Token
+                             );
 
-                            await DeleteFileWithRetryAsync(zipFile);
-
+                            if (!deletedConfirmed)
+                            {
+                                _updateStatus("Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
+                                await MessageBox.Show(_parentWindow, $"Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
+                            }
                         }
                     }
 
@@ -458,62 +529,6 @@ namespace ValheimLauncher2.Models.Download
                 await MessageBox.Show(_parentWindow, $"Error");
             }
 
-        }
-
-
-        /// <summary>
-        /// Check if a file can be deleted, with retries if it's locked.
-        /// </summary>
-        private async Task<bool> DeleteFileWithRetryAsync(string filePath, int maxRetries = 10, int delayMs = 1500)
-        {
-
-            for (int i = 0; i < maxRetries; i++)
-            {
-
-                if (!File.Exists(filePath))
-                {
-
-                    return true;
-                }
-
-                try
-                {
-
-                    File.Delete(filePath);
-                    return true; 
-                }
-                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
-                {
-
-                    if (i == maxRetries - 1)
-                    {
-                        break;
-                    }
-
-                    _updateStatus($"Warte auf Freigabe von '{Path.GetFileName(filePath)}' (Versuch {i + 1}/{maxRetries})...");
-
-
-                    await Task.Delay(delayMs * (i + 1));
-                }
-                catch (Exception ex)
-                {
-
-                    _updateStatus($"Unbekannter Fehler beim Löschen von '{Path.GetFileName(filePath)}': {ex.Message}");
-                    return false;
-                }
-            }
-
-
-            if (File.Exists(filePath))
-            {
-                _updateStatus($"FEHLER: Konnte '{Path.GetFileName(filePath)}' nach {maxRetries} Versuchen nicht löschen. Die Datei bleibt gesperrt.");
-            }
-            else
-            {
-                return true;
-            }
-
-            return false;
         }
 
         /// <summary>
@@ -590,9 +605,7 @@ namespace ValheimLauncher2.Models.Download
         private bool IsZipValid(string cachedZipPath, long onlineFileSize)
         {
             if (!System.IO.File.Exists(cachedZipPath))
-            {
                 return false;
-            }
 
             try
             {
@@ -603,22 +616,169 @@ namespace ValheimLauncher2.Models.Download
                     return false;
                 }
 
-                using (var archive = SharpCompress.Archives.ArchiveFactory.Open(cachedZipPath))
+                // WICHTIG: FileStream selbst kontrollieren
+                using (var fs = new FileStream(cachedZipPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var archive = SharpCompress.Archives.ArchiveFactory.Open(fs))
                 {
+                    // ALLE Einträge materialisieren – verhindert Lazy-Locking
+                    var entries = archive.Entries.ToList();
 
-                    if (archive.Entries.Any())
-                    {
-                        return true;
-                    }
-                    return true;
+                    return entries.Count > 0;
                 }
             }
             catch (Exception ex)
             {
-
                 _updateStatus($"Cache-Prüfung: ZIP-Datei ist beschädigt/korrupt. {ex.Message} (Download benötigt)");
                 return false;
             }
         }
+
+        #region delete Files
+
+
+        public static bool IsFileLocked(string path)
+        {
+            try
+            {
+                using var stream = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.ReadWrite,
+                    FileShare.None
+                );
+                return false; // Datei ist NICHT gelockt
+            }
+            catch (IOException)
+            {
+                return true; // Datei ist von einem anderen Prozess gesperrt
+            }
+        }
+
+
+        public static async Task<bool> WaitUntilFileIsUnlockedAsync(
+    string path,
+    TimeSpan timeout,
+    CancellationToken cancellationToken = default)
+        {
+            var sw = Stopwatch.StartNew();
+
+            while (sw.Elapsed < timeout && !cancellationToken.IsCancellationRequested)
+            {
+                if (!IsFileLocked(path))
+                    return true;
+
+                await Task.Delay(5000, cancellationToken);
+            }
+
+            return !IsFileLocked(path);
+        }
+
+
+        /// <summary>
+        /// Wartet asynchron auf das Löschen einer Datei via FileSystemWatcher.
+        /// </summary>
+        /// <param name="filePath">Der vollständige Pfad zur Datei.</param>
+        /// <param name="timeout">Timeout-Dauer (Standard: 30 Sekunden).</param>
+        /// <param name="cancellationToken">Optional: CancellationToken für Abbruch.</param>
+        /// <returns>True, wenn die Datei gelöscht wurde; false bei Timeout oder Fehler.</returns>
+        /// 
+        public static async Task<bool> ForceDeleteAsync(
+    string path,
+    TimeSpan timeout,
+    CancellationToken ct = default)
+        {
+            var sw = Stopwatch.StartNew();
+
+            while (sw.Elapsed < timeout)
+            {
+                try
+                {
+                    if (File.Exists(path))
+                    {
+                        File.Delete(path);
+                    }
+
+                    // No exception? Datei weg?
+                    if (!File.Exists(path))
+                    {
+                        return true;
+                    }
+                }
+                catch (IOException)
+                {
+
+                }
+                catch (UnauthorizedAccessException)
+                {
+
+                }
+
+                await Task.Delay(150, ct);
+            }
+
+            return !File.Exists(path);
+        }
+
+
+        public static async Task<bool> WaitForFileDeletionAsync(string filePath, TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            
+            bool unlocked = await WaitUntilFileIsUnlockedAsync(
+            filePath,
+            TimeSpan.FromSeconds(10)
+            );
+
+
+            if (!unlocked)
+                throw new IOException("Datei ist gesperrt und konnte nicht freigegeben werden.");
+
+            await ForceDeleteAsync(filePath, timeout, cancellationToken);
+
+
+            if (!File.Exists(filePath))
+                return true;
+
+
+
+            var actualTimeout = timeout;
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(actualTimeout);
+
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            using var watcher = new FileSystemWatcher
+            {
+                Path = Path.GetDirectoryName(filePath) ?? throw new ArgumentException("Ungültiger Dateipfad."),
+                Filter = Path.GetFileName(filePath),
+                NotifyFilter = NotifyFilters.FileName,
+                EnableRaisingEvents = true
+            };
+
+            void OnDeleted(object sender, FileSystemEventArgs e)
+            {
+                if (e.FullPath.Equals(filePath, StringComparison.OrdinalIgnoreCase))
+                    tcs.TrySetResult(true);
+            }
+
+            watcher.Deleted += OnDeleted;
+
+
+            if (!File.Exists(filePath))
+                tcs.TrySetResult(true);
+
+            try
+            {
+                return await tcs.Task.WaitAsync(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return !File.Exists(filePath); // Fallback: vielleicht ist sie doch weg
+            }
+            finally
+            {
+                watcher.Deleted -= OnDeleted;
+            }
+        }
+        #endregion
     }
 }
