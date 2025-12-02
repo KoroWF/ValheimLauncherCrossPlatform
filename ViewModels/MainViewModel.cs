@@ -96,23 +96,42 @@ namespace ValheimLauncher2.ViewModels
             );
 
             _modDownloader = new ModDownloader(
-            status => StatusText = status,
-            progress =>
+    status => Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => StatusText = status),
+    progress =>
+    {
+        Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (double.TryParse(progress, NumberStyles.Any, CultureInfo.InvariantCulture, out double p))
             {
-                if (double.TryParse(progress, NumberStyles.Any, CultureInfo.InvariantCulture, out double p))
-                {
-                    ProgressValue = p;
-                }
-            },
-            speed => DownloadSpeedText = speed,
-            currentSettings,
-            () => SaveSettings(),
-            async errorMsg => await MessageBox.Show(_parentWindow, errorMsg)
-            );
+                ProgressValue = p;
+            }
+        });
+    },
+    speed => Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => DownloadSpeedText = speed),
+    currentSettings,
+    () => SaveSettings(),
+            async errorMsg => await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(async () => await MessageBox.Show(_parentWindow, errorMsg))
+);
 
             Checkstatus();
 
-            _ = CheckAndUpdateModpackAsync();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await CheckAndUpdateModpackAsync();
+                }
+                catch (Exception ex)
+                {
+                    Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        StatusText = ex.Message;
+                    });
+                    Debug.WriteLine($"Error in initial modpack check: {ex.Message}");
+                }
+            });
+        
+
         }
 
         /// <summary>
@@ -530,7 +549,14 @@ namespace ValheimLauncher2.ViewModels
         /// </summary>
         private async Task CheckAndUpdateModpackAsync()
         {
-            if (!IsGameInstalled) return;
+            if (!IsGameInstalled)
+            {
+                Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    StatusText = "Auto-Update übersprungen: Spielpfad nicht eingerichtet oder Installation unvollständig.";
+                });
+                return;
+            }
 
             (string? onlineVersion, bool needsUpdate) = await _modDownloader.CheckForUpdatesAsync();
             if (onlineVersion != null)
@@ -677,7 +703,7 @@ namespace ValheimLauncher2.ViewModels
         private void CloseApplication()
         {
             _modDownloader.CancelOperations();
-            Task.Delay(2000);
+            Task.Delay(1000);
             _parentWindow?.Close();
         }
     }

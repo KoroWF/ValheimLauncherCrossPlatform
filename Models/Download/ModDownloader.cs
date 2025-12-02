@@ -4,17 +4,14 @@ using System.Data;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Newtonsoft.Json.Linq;
-using SharpCompress.Archives;
-using SharpCompress.Common;
-using ValheimCrossPlatformLauncher;
 using ValheimLauncher2.Models.Settings;
-using ValheimLauncher2.Models.Utils;
 using File = System.IO.File;
 
 namespace ValheimLauncher2.Models.Download
@@ -111,39 +108,35 @@ namespace ValheimLauncher2.Models.Download
 
             _updateStatus("Starting mod update...");
 
-                var apiData = await GetThunderstoreApiData("ImmernDarNew/ImmernDarNew_Modpack");
-                //var apiData = await GetThunderstoreApiData("TeamKoro/Mithrael_Modpack"); //for testing
+            var apiData = await GetThunderstoreApiData("ImmernDarNew/ImmernDarNew_Modpack");
+            //var apiData = await GetThunderstoreApiData("TeamKoro/Mithrael_Modpack"); //for testing
 
-                if (apiData.dependencies == null)
-                {
-                    _updateStatus("Error: Could not retrieve modpack dependencies.");
-                    return;
-                }
+            if (apiData.dependencies == null)
+            {
+                _updateStatus("Error: Could not retrieve modpack dependencies.");
+                return;
+            }
 
-                _settings.Modpack.ExpectedModFiles = new List<string>(apiData.dependencies);
-                string pluginsPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "plugins");
-                string pluginZipPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "pluginZip");
-                string extraModsPath = Path.Combine(pluginsPath, "1ExtraMods");
-                Directory.CreateDirectory(extraModsPath);
+            _settings.Modpack.ExpectedModFiles = new List<string>(apiData.dependencies);
+            string pluginsPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "plugins");
+            string pluginZipPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "pluginZip");
+            string extraModsPath = Path.Combine(pluginsPath, "1ExtraMods");
+            Directory.CreateDirectory(extraModsPath);
 
-                _updateStatus($"Räume auf...");
-                await CleanupOldModsAsync(pluginsPath);
-                await CleanupOldZipsAsync(pluginZipPath, apiData.dependencies.ToList());
+            _updateStatus($"Räume auf...");
+            await CleanupOldModsAsync(pluginsPath);
+            await CleanupOldZipsAsync(pluginZipPath, apiData.dependencies.ToList());
 
-                bool success = await DownloadAndExtractDependenciesAsync(apiData.dependencies);
+            bool success = await DownloadAndExtractDependenciesAsync(apiData.dependencies);
 
-                if (success)
-                {
-                    await InstallBepInExCoreAsync();
+            if (success)
+            {
+                await InstallBepInExCoreAsync();
 
-                    _settings.Modpack.CurrentLocalVersion = apiData.versionNumber;
-                    _saveSettings();
-                    _updateStatus("Modpack updated!");
-                }
-                else
-                {
-                    _updateStatus("Mod Update hatte Fehler.");
-                }
+                _settings.Modpack.CurrentLocalVersion = apiData.versionNumber;
+                _saveSettings();
+                _updateStatus("Modpack updated!");
+            }
 
         }
 
@@ -160,8 +153,15 @@ namespace ValheimLauncher2.Models.Download
             string pluginsPath = Path.Combine(bepinexPath, "plugins");
             string pluginZipPath = Path.Combine(bepinexPath, "pluginZip");
 
-            Directory.CreateDirectory(pluginsPath);
-            Directory.CreateDirectory(pluginZipPath);
+            if (!Directory.Exists(pluginsPath))
+            {
+                Directory.CreateDirectory(pluginsPath);
+            }
+
+            if (!Directory.Exists(pluginZipPath))
+            {
+                Directory.CreateDirectory(pluginZipPath);
+            }
 
             bool allOperationsSuccessful = true;
             int totalDependencies = dependencies.Length;
@@ -191,128 +191,152 @@ namespace ValheimLauncher2.Models.Download
                 catch (HttpRequestException hex)
                 {
                     _updateStatus($"HEAD failed for {dependency} (will download anyway): {hex.Message}");
-                    await MessageBox.Show(_parentWindow, $"HEAD failed for {dependency} (will download anyway)");
+                    await _showError($"HEAD failed for {dependency} (will download anyway): {hex.Message}");
                     allOperationsSuccessful = false;
                 }
 
-                try
+                if (File.Exists(cachedZipPath))
                 {
-                    if (File.Exists(cachedZipPath))
+                    if (IsZipValid(cachedZipPath, onlineFileSize))
                     {
-                        if (IsZipValid(cachedZipPath, onlineFileSize))
-                        {
-                            downloadNeeded = false;
-                        }
-                        else
-                        {
-
-
-                            _updateStatus($"Lösche korrupte Zip-Datei: {dependency}");
-
-                            bool deletedConfirmed = await WaitForFileDeletionAsync(
-                                 cachedZipPath,
-                                 TimeSpan.FromSeconds(10),
-                                 _cancellationTokenSource.Token
-                             );
-
-                            downloadNeeded = true;
-                        }
+                        downloadNeeded = false;
+                    }
+                    else
+                    {
+                        downloadNeeded = true;
                     }
                 }
-                catch (Exception ex)
-                {
-                    _updateStatus($"Warnung zu {dependency}: {ex.Message}");
-                    await MessageBox.Show(_parentWindow, $"Konnte alte Zip-Datei nicht löschen: {ex.Message}");
-                    allOperationsSuccessful = false;
-                }
+
 
                 if (downloadNeeded)
                 {
                     bool downloadSuccess = false;
 
-                    try
+                    while (!downloadSuccess)
                     {
-                        long fileSize = onlineFileSize > 0 ? onlineFileSize : 0;
-
-                        _updateStatus($"Downloade: {dependency}");
-
-
-                        var buffer = new byte[81920];
-                        long totalBytes = 0;
-                        var lastReportTime = DateTime.UtcNow;
-
-                        using var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, _cancellationTokenSource.Token);
-                        response.EnsureSuccessStatusCode();
-
-                        using var responseStream = await response.Content.ReadAsStreamAsync();
-
-                        using var fileStream = new FileStream(cachedZipPath, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite, bufferSize: 81920, useAsync: true);
-
-                        int bytesRead;
-
-                        while ((bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length, _cancellationTokenSource.Token)) > 0)
+                        try
                         {
+                            long fileSize = onlineFileSize > 0 ? onlineFileSize : 0;
 
-                            await fileStream.WriteAsync(buffer, 0, bytesRead, _cancellationTokenSource.Token);
-                            totalBytes += bytesRead;
+                            _updateStatus($"Downloade: {dependency}");
 
 
-                            var now = DateTime.UtcNow;
-                            if ((now - lastReportTime).TotalMilliseconds >= 100)
+                            var buffer = new byte[81920];
+                            long totalBytes = 0;
+                            var lastReportTime = DateTime.UtcNow;
+
+                            using var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, _cancellationTokenSource.Token);
+                            response.EnsureSuccessStatusCode();
+
+                            using var responseStream = await response.Content.ReadAsStreamAsync();
+
+                            using var fileStream = new FileStream(cachedZipPath, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite, bufferSize: 81920, useAsync: true);
+                            int bytesRead;
+
+                            while ((bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length, _cancellationTokenSource.Token)) > 0)
                             {
-                                double downloadedMb = totalBytes / (1024.0 * 1024.0);
-                                double totalMb = fileSize / (1024.0 * 1024.0);
-                                string progressText = fileSize > 0 ? $"{downloadedMb:F2} / {totalMb:F2} MB" : $"{downloadedMb:F2} MB";
-                                _updateSpeed?.Invoke(progressText);
-                                lastReportTime = now;
+
+                                await fileStream.WriteAsync(buffer, 0, bytesRead, _cancellationTokenSource.Token);
+                                totalBytes += bytesRead;
+
+
+                                var now = DateTime.UtcNow;
+                                if ((now - lastReportTime).TotalMilliseconds >= 100)
+                                {
+                                    double downloadedMb = totalBytes / (1024.0 * 1024.0);
+                                    double totalMb = fileSize / (1024.0 * 1024.0);
+                                    string progressText = fileSize > 0 ? $"{downloadedMb:F2} / {totalMb:F2} MB" : $"{downloadedMb:F2} MB";
+                                    _updateSpeed?.Invoke(progressText);
+                                    lastReportTime = now;
+                                }
                             }
-                        }
 
-                        downloadSuccess = true;
-                    }
-                    // Issues related to file access
-                    catch (IOException ioEx)
-                    {
-                        string errorMessage = "Fehler beim Zugriff auf die Festplatte (Datei gesperrt/Platte voll/Pfadproblem).";
-                        if (ioEx.Message.Contains("access") || ioEx.Message.Contains("use by another process"))
+                            downloadSuccess = true;
+                        }
+                        // Issues related to file access
+                        catch (IOException ioEx)
                         {
-                            errorMessage = "Fehler: Die Datei wird gesperrt (Access Denied). Bitte schließen Sie externe Programme (z.B. Virenscanner).";
+                            string errorMessage = "Fehler beim Zugriff auf die Festplatte (Datei gesperrt/Platte voll/Pfadproblem).";
+                            if (ioEx.Message.Contains("access") || ioEx.Message.Contains("use by another process"))
+                            {
+                                errorMessage = "Fehler: Die Datei wird gesperrt (Access Denied). Bitte schließen Sie externe Programme (z.B. Virenscanner).";
+                            }
+                            _updateStatus($"I/O Fehler beim Download von {dependency}: {errorMessage}");
                         }
-                        _updateStatus($"I/O Fehler beim Download von {dependency}: {errorMessage}");
-                    }
-                    // Issues related to HTTP requests
-                    catch (HttpRequestException httpEx)
-                    {
-                        string statusCodeInfo = httpEx.StatusCode.HasValue
-                            ? $"Status Code: {(int)httpEx.StatusCode} {httpEx.StatusCode.Value}"
-                            : "Verbindungsfehler";
+                        // Issues related to HTTP requests
+                        catch (HttpRequestException httpEx)
+                        {
+                            string statusCodeInfo = httpEx.StatusCode.HasValue
+                                ? $"Status Code: {(int)httpEx.StatusCode} {httpEx.StatusCode.Value}"
+                                : "Verbindungsfehler";
 
-                        _updateStatus($"HTTP Fehler beim Download von {dependency}: {statusCodeInfo} ({httpEx.Message})");
-                    }
-                    // Issues related to cancellation
-                    catch (OperationCanceledException)
-                    {
-                        _updateStatus($"Download von {dependency} wurde abgebrochen.");
-                    }
-                    // All other exceptions
-                    catch (Exception ex)
-                    {
-                        _updateStatus($"Unbekannter kritischer Fehler beim Download von {dependency}: {ex.Message}");
-                    }
+                            _updateStatus($"HTTP Fehler beim Download von {dependency}: {statusCodeInfo} ({httpEx.Message})");
+                        }
+                        // Issues related to cancellation
+                        catch (OperationCanceledException)
+                        {
+                            _updateStatus($"Download von {dependency} wurde abgebrochen.");
 
-                    // After all attempts, check if download was successful
-                    if (!downloadSuccess)
-                    {
-                        await MessageBox.Show(_parentWindow, $"Download-Fehler für {dependency}. Siehe Log für Details.");
+                            if (File.Exists(cachedZipPath))
+                            {
+                                _updateStatus("Räume unvollständige Download-Datei auf...");
+                                try
+                                {
+
+                                    bool deletedConfirmed = await ModDownloader.WaitForFileDeletionAsync(
+                                        cachedZipPath,
+                                        TimeSpan.FromSeconds(5), 
+                                        _cancellationTokenSource.Token
+                                    );
+
+                                    if (deletedConfirmed)
+                                    {
+                                        _updateStatus($"Unvollständige Datei {Path.GetFileName(cachedZipPath)} gelöscht.");
+                                    }
+                                    else
+                                    {
+                                        await _showError($"Warnung: Konnte unvollständige Datei nach Abbruch nicht löschen (Sperre nach 5s).");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    await _showError($"Kritischer Fehler beim Aufräumen nach Abbruch: {ex.Message}");
+                                }
+                            }
+                            return false;
+                        }
+                        // All other exceptions
+                        catch (Exception ex)
+                        {
+                            _updateStatus($"Unbekannter kritischer Fehler beim Download von {dependency}: {ex.Message}");
+                        }
+
+                        // After all attempts, check if download was successful
+                        if (!downloadSuccess)
+                        {
+                            await _showError($"Download-Fehler für {dependency}.Starte Download noch einmal.");
+                        }
+
+
+                        _updateSpeed?.Invoke("");
                     }
-                    _updateStatus("Überprüfe Mods...");
-                    _updateSpeed?.Invoke("");
                 }
 
+                try {
 
+                    if (IsZipValid(cachedZipPath, onlineFileSize))
+                    {
+                        await ExtractToPlugins(dependency, pluginZipPath);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _updateStatus($"Error: Fehler von {dependency}: {ex.Message}");
+                    await _showError($"Error: Fehler von{dependency}.");
+                }
 
+               
 
-                await ExtractToPlugins(dependency, pluginZipPath);
             }
 
             return allOperationsSuccessful;
@@ -324,24 +348,37 @@ namespace ValheimLauncher2.Models.Download
         /// </summary>
         private async Task ExtractToPlugins(string dependency, string pluginZipPath)
         {
-            try
+            string baseDirectory = _settings.ValheimInstallPath;
+            string bepinexPath = Path.Combine(baseDirectory, "BepInEx");
+            string pluginsPath = Path.Combine(bepinexPath, "plugins");
+
+            bool isBepInExPack = dependency.Contains("denikson-BepInExPack_Valheim", StringComparison.OrdinalIgnoreCase);
+
+            string cachedZipPath = Path.Combine(pluginZipPath, $"{dependency}.zip");
+            string extractPath = isBepInExPack ? baseDirectory : Path.Combine(pluginsPath, dependency);
+            Directory.CreateDirectory(extractPath);
+
+            using (var archive = ZipFile.OpenRead(cachedZipPath))
             {
-                string baseDirectory = _settings.ValheimInstallPath;
-                string bepinexPath = Path.Combine(baseDirectory, "BepInEx");
-                string pluginsPath = Path.Combine(bepinexPath, "plugins");
+                var notAllowed = new HashSet<string> { "CHANGELOG.md", "icon.png", "manifest.json", "README.md", "LICENSE.md" };
 
-                bool isBepInExPack = dependency.Contains("denikson-BepInExPack_Valheim", StringComparison.OrdinalIgnoreCase);
-
-                string cachedZipPath = Path.Combine(pluginZipPath, $"{dependency}.zip");
-                string extractPath = isBepInExPack ? baseDirectory : Path.Combine(pluginsPath, dependency);
-                Directory.CreateDirectory(extractPath);
-
-                using (var archive = ArchiveFactory.Open(cachedZipPath))
+                foreach (var entry in archive.Entries)
                 {
-                    foreach (var entry in archive.Entries)
+                    try
                     {
-                        string entryKey = entry.Key;
-                        var notAllowed = new HashSet<string> { "CHANGELOG.md", "icon.png", "manifest.json", "README.md", "LICENSE.md" };
+
+                        string entryKey = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
+
+
+                        if (string.IsNullOrEmpty(entryKey) || entry.Length == 0 || entryKey.EndsWith(Path.DirectorySeparatorChar.ToString()))
+                        {
+                            continue;
+                        }
+
+                        if (notAllowed.Contains(Path.GetFileName(entryKey)))
+                        {
+                            continue;
+                        }
 
                         if (entryKey.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                         {
@@ -349,10 +386,13 @@ namespace ValheimLauncher2.Models.Download
                             try
                             {
 
-                                entry.WriteToFile(tempInnerZipPath, new ExtractionOptions { Overwrite = true });
-
+                                entry.ExtractToFile(tempInnerZipPath, overwrite: true);
 
                                 await ExtractInnerZipContents(tempInnerZipPath, extractPath, dependency);
+                            }
+                            catch (Exception ex)
+                            {
+                                _updateStatus($"Error extracting {dependency}: {ex.Message}");
                             }
                             finally
                             {
@@ -360,32 +400,39 @@ namespace ValheimLauncher2.Models.Download
                                 if (File.Exists(tempInnerZipPath))
                                 {
                                     bool deletedConfirmed = await WaitForFileDeletionAsync(
-                                         tempInnerZipPath,
-                                         TimeSpan.FromSeconds(10),
-                                         _cancellationTokenSource.Token
-                                     );
+                                           tempInnerZipPath,
+                                           TimeSpan.FromSeconds(10),
+                                           _cancellationTokenSource.Token
+                                        );
 
                                     if (!deletedConfirmed)
                                     {
                                         _updateStatus("Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
-                                        await MessageBox.Show(_parentWindow, $"Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
+                                        await _showError("Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
                                     }
                                 }
                             }
                         }
-                        else if (!notAllowed.Contains(entry.Key))
+                        else
                         {
 
-                            entry.WriteToDirectory(extractPath, new ExtractionOptions { ExtractFullPath = true, Overwrite = true });
+                            string destinationPath = Path.Combine(extractPath, entryKey);
+
+
+                            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+
+
+                            entry.ExtractToFile(destinationPath, overwrite: true);
                         }
+                    }
+                    catch (Exception ex)
+                    {
+                        Task.Delay(1000).Wait();
+                        _updateStatus($"Error extracting from {dependency}: {ex.Message}");
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                _updateStatus($"Error extracting {dependency}: {ex.Message}");
-
-            }
+            _updateStatus("Überprüfe Mods...");
         }
 
         /// <summary>
@@ -393,55 +440,60 @@ namespace ValheimLauncher2.Models.Download
         /// </summary>
         private async Task ExtractInnerZipContents(string innerZipPath, string extractPath, string originalDependency)
         {
-            using (var innerArchive = ArchiveFactory.Open(innerZipPath))
+            using (var innerArchive = ZipFile.OpenRead(innerZipPath))
             {
                 foreach (var innerEntry in innerArchive.Entries)
                 {
-                    string innerEntryKey = innerEntry.Key;
+                    string innerEntryKey = innerEntry.FullName;
                     string innerExtension = Path.GetExtension(innerEntryKey).ToLowerInvariant();
                     var allowedExtensions = new HashSet<string> { ".dll", ".yaml", ".yml", ".json", ".db", ".mdb", ".xml" };
 
+
+                    if (string.IsNullOrEmpty(innerEntryKey) || innerEntry.Length == 0) continue;
+
                     if (innerEntryKey.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                     {
-
                         string tempDeeperZipPath = Path.Combine(Path.GetTempPath(), $"temp_deeper_{Guid.NewGuid()}.zip");
                         try
                         {
-                            innerEntry.WriteToFile(tempDeeperZipPath, new ExtractionOptions { Overwrite = true });
+
+                            innerEntry.ExtractToFile(tempDeeperZipPath, overwrite: true);
                             await ExtractInnerZipContents(tempDeeperZipPath, extractPath, originalDependency);
                         }
                         finally
                         {
+
                             if (File.Exists(tempDeeperZipPath))
                             {
                                 bool deletedConfirmed = await WaitForFileDeletionAsync(
-                                    tempDeeperZipPath,
-                                    TimeSpan.FromSeconds(10)
-
-                                );
+                                        tempDeeperZipPath,
+                                        TimeSpan.FromSeconds(10)
+                                    );
 
                                 if (!deletedConfirmed)
                                 {
                                     _updateStatus("Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
-                                    await MessageBox.Show(_parentWindow, $"Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
+                                    await _showError("Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
                                 }
                             }
                         }
                     }
+
                     else if (allowedExtensions.Contains(innerExtension) && !innerEntryKey.Contains("manifest.json"))
                     {
+                        string fileName = Path.GetFileName(innerEntryKey);
+                        string destinationPath = Path.Combine(extractPath, fileName);
 
-                        innerEntry.WriteToDirectory(extractPath, new ExtractionOptions { ExtractFullPath = false, Overwrite = true });
+                        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+                        innerEntry.ExtractToFile(destinationPath, overwrite: true);
                     }
                 }
             }
         }
 
         /// <summary>
-        /// Cleans up old zip files in the plugin zip directory that are not part of the expected dependencies.
+        /// Cleanups old zip files that are no longer in the list of expected dependencies.
         /// </summary>
-        /// <param name="pluginZipPath">The path to the plugin zip directory.</param>
-        /// <param name="expectedDependencies">The list of expected dependencies.</param>
         private async Task CleanupOldZipsAsync(string pluginZipPath, List<string> expectedDependencies)
         {
             try
@@ -456,35 +508,35 @@ namespace ValheimLauncher2.Models.Download
                     var zipsToKeep = new HashSet<string>(expectedDependencies.Select(dep => $"{dep}.zip"), StringComparer.OrdinalIgnoreCase);
                     var allZips = Directory.GetFiles(pluginZipPath, "*.zip");
 
+                    _updateStatus("Räume alte ZIP-Dateien auf...");
+
                     foreach (var zipFile in allZips)
                     {
                         var zipName = Path.GetFileName(zipFile);
                         if (!zipsToKeep.Contains(zipName))
                         {
+                            _updateStatus($"Lösche alte ZIP: {zipName}");
+
                             bool deletedConfirmed = await WaitForFileDeletionAsync(
-                                 zipFile,
-                                 TimeSpan.FromSeconds(10),
-                                 _cancellationTokenSource.Token
-                             );
+                                   zipFile,
+                                   TimeSpan.FromSeconds(10),
+                                   _cancellationTokenSource.Token
+                                 );
 
                             if (!deletedConfirmed)
                             {
-                                _updateStatus("Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
-                                await MessageBox.Show(_parentWindow, $"Warnung: ZIP-Datei konnte nicht vollständig gelöscht werden (Timeout).");
+                                _updateStatus($"Warnung: Konnte alte ZIP-Datei ({zipName}) nicht löschen.");
+                                await _showError($"Warnung: Konnte alte ZIP-Datei ({zipName}) nicht löschen. Bitte manuell löschen.");
                             }
                         }
                     }
-
-
                 });
 
             }
             catch (Exception ex)
             {
-
-                await MessageBox.Show(_parentWindow, $"Error");
+                await _showError($"Fehler beim Aufräumen alter Zips: {ex.Message}");
             }
-
         }
 
         /// <summary>
@@ -494,41 +546,44 @@ namespace ValheimLauncher2.Models.Download
         /// <param name="expectedDependencies">The list of expected dependencies.</param>
         private async Task CleanupOldModsAsync(string pluginsPath)
         {
-            try
+            _updateStatus("Bereinige alte Mod Ordner...");
+
+            await Task.Run(async () =>
             {
+                if (!Directory.Exists(pluginsPath)) return;
 
-                await Task.Run(() =>
+                var foldersToKeep = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                 {
-                    if (!Directory.Exists(pluginsPath)) return;
+                    "1ExtraMods",
+                    "MMHOOK",
+                    "HappyDragoon-DragoonCapes"
+                };
 
-                    var foldersToKeep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foldersToKeep.Add("1ExtraMods");
-                    foldersToKeep.Add("MMHOOK");
-                    foldersToKeep.Add("HappyDragoon-DragoonCapes");
-                    foreach (var dirPath in Directory.GetDirectories(pluginsPath))
+                foreach (var dirPath in Directory.GetDirectories(pluginsPath))
+                {
+                    var dirName = new DirectoryInfo(dirPath).Name;
+                    if (!foldersToKeep.Contains(dirName))
                     {
-                        var dirName = new DirectoryInfo(dirPath).Name;
-                        if (!foldersToKeep.Contains(dirName))
+                        try
                         {
-                            try
-                            {
-                                Directory.Delete(dirPath, true);
-                            }
-                            catch (Exception ex)
-                            {
+                            bool deleted = await ForceDeleteDirectoryAsync(dirPath);
 
+                            if (!deleted)
+                            {
+                                _updateStatus($"Warnung: Konnte Mod Ordner nicht löschen.");
+                                await _showError($"Warnung: Konnte Mod Ordner nicht löschen.");
                             }
                         }
+                        catch (Exception ex)
+                        {
+                            _updateStatus($"Konnte Mod Ordner nicht löschen.");
+                            await _showError($"Konnte Mod Ordner nicht löschen.");
+                        }
                     }
-                });
+                }
 
-            }
-            catch (Exception ex)
-            {
-                _updateStatus($"Konnte Mod Ordner nicht löschen. {ex.Message} ");
-                await MessageBox.Show(_parentWindow, $"Error");
-            }
-
+                await Task.Delay(500);
+            });
         }
 
         /// <summary>
@@ -604,180 +659,134 @@ namespace ValheimLauncher2.Models.Download
         /// </summary>
         private bool IsZipValid(string cachedZipPath, long onlineFileSize)
         {
-            if (!System.IO.File.Exists(cachedZipPath))
-                return false;
-
             try
             {
                 var localFileInfo = new FileInfo(cachedZipPath);
-                if (localFileInfo.Length != onlineFileSize)
+
+                if (localFileInfo.Length != onlineFileSize && onlineFileSize > 0)
                 {
-                    _updateStatus("Cache-Prüfung: Größe stimmt nicht überein. (Download benötigt)");
                     return false;
                 }
 
-                // WICHTIG: FileStream selbst kontrollieren
-                using (var fs = new FileStream(cachedZipPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-                using (var archive = SharpCompress.Archives.ArchiveFactory.Open(fs))
-                {
-                    // ALLE Einträge materialisieren – verhindert Lazy-Locking
-                    var entries = archive.Entries.ToList();
+                bool isValid;
 
-                    return entries.Count > 0;
+                using (var archive = ZipFile.OpenRead(cachedZipPath))
+                {
+
+                    isValid = archive.Entries.Any();
                 }
+
+                return isValid;
             }
             catch (Exception ex)
             {
-                _updateStatus($"Cache-Prüfung: ZIP-Datei ist beschädigt/korrupt. {ex.Message} (Download benötigt)");
                 return false;
             }
         }
 
         #region delete Files
 
-
-        public static bool IsFileLocked(string path)
+        /// <summary>
+        /// Trys to delete a file within a specified timeout period.
+        /// Stellt sicher, dass auf die Freigabe des Dateihandles gewartet wird, ohne vorzeitig abzubrechen.
+        /// </summary>
+        public static async Task<bool> WaitForFileDeletionAsync(string filePath, TimeSpan timeout, CancellationToken externalCancellationToken = default)
         {
+            if (!File.Exists(filePath)) return true;
+
+            var stopwatch = Stopwatch.StartNew();
+
             try
             {
-                using var stream = new FileStream(
-                    path,
-                    FileMode.Open,
-                    FileAccess.ReadWrite,
-                    FileShare.None
-                );
-                return false; // Datei ist NICHT gelockt
+                var attributes = File.GetAttributes(filePath);
+                if ((attributes & FileAttributes.ReadOnly) == FileAttributes.ReadOnly)
+                {
+                    File.SetAttributes(filePath, attributes & ~FileAttributes.ReadOnly);
+                }
             }
-            catch (IOException)
-            {
-                return true; // Datei ist von einem anderen Prozess gesperrt
-            }
-        }
+            catch { /* Ignore */ }
 
-
-        public static async Task<bool> WaitUntilFileIsUnlockedAsync(
-    string path,
-    TimeSpan timeout,
-    CancellationToken cancellationToken = default)
-        {
-            var sw = Stopwatch.StartNew();
-
-            while (sw.Elapsed < timeout && !cancellationToken.IsCancellationRequested)
-            {
-                if (!IsFileLocked(path))
-                    return true;
-
-                await Task.Delay(5000, cancellationToken);
-            }
-
-            return !IsFileLocked(path);
-        }
-
-
-        /// <summary>
-        /// Wartet asynchron auf das Löschen einer Datei via FileSystemWatcher.
-        /// </summary>
-        /// <param name="filePath">Der vollständige Pfad zur Datei.</param>
-        /// <param name="timeout">Timeout-Dauer (Standard: 30 Sekunden).</param>
-        /// <param name="cancellationToken">Optional: CancellationToken für Abbruch.</param>
-        /// <returns>True, wenn die Datei gelöscht wurde; false bei Timeout oder Fehler.</returns>
-        /// 
-        public static async Task<bool> ForceDeleteAsync(
-    string path,
-    TimeSpan timeout,
-    CancellationToken ct = default)
-        {
-            var sw = Stopwatch.StartNew();
-
-            while (sw.Elapsed < timeout)
+            while (stopwatch.Elapsed < timeout && !externalCancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    if (File.Exists(path))
-                    {
-                        File.Delete(path);
-                    }
-
-                    // No exception? Datei weg?
-                    if (!File.Exists(path))
-                    {
-                        return true;
-                    }
+                    File.Delete(filePath);
                 }
-                catch (IOException)
+                catch (IOException) { /* File is locked */ }
+                catch (UnauthorizedAccessException) { /* access denied */ }
+
+
+                if (!File.Exists(filePath))
+                {
+                    return true;
+                }
+
+
+                try
+                {
+                    await Task.Delay(50, externalCancellationToken);
+                }
+                catch (OperationCanceledException)
                 {
 
                 }
-                catch (UnauthorizedAccessException)
-                {
-
-                }
-
-                await Task.Delay(150, ct);
             }
 
-            return !File.Exists(path);
+            return !File.Exists(filePath);
         }
 
-
-        public static async Task<bool> WaitForFileDeletionAsync(string filePath, TimeSpan timeout, CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Deletes a directory and all its contents, retrying if necessary.
+        /// Nutzt ein Timeout, um auf die Freigabe von Dateihandles zu warten.
+        /// </summary>
+        public static async Task<bool> ForceDeleteDirectoryAsync(string path)
         {
-            
-            bool unlocked = await WaitUntilFileIsUnlockedAsync(
-            filePath,
-            TimeSpan.FromSeconds(10)
-            );
+            if (!Directory.Exists(path)) return true;
 
 
-            if (!unlocked)
-                throw new IOException("Datei ist gesperrt und konnte nicht freigegeben werden.");
+            var timeout = TimeSpan.FromSeconds(5);
+            var stopwatch = Stopwatch.StartNew();
 
-            await ForceDeleteAsync(filePath, timeout, cancellationToken);
-
-
-            if (!File.Exists(filePath))
-                return true;
-
-
-
-            var actualTimeout = timeout;
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(actualTimeout);
-
-            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-            using var watcher = new FileSystemWatcher
+            return await Task.Run(async () =>
             {
-                Path = Path.GetDirectoryName(filePath) ?? throw new ArgumentException("Ungültiger Dateipfad."),
-                Filter = Path.GetFileName(filePath),
-                NotifyFilter = NotifyFilters.FileName,
-                EnableRaisingEvents = true
-            };
+                while (stopwatch.Elapsed < timeout)
+                {
+                    try
+                    {
+                        var dir = new DirectoryInfo(path);
 
-            void OnDeleted(object sender, FileSystemEventArgs e)
-            {
-                if (e.FullPath.Equals(filePath, StringComparison.OrdinalIgnoreCase))
-                    tcs.TrySetResult(true);
-            }
+                        foreach (var file in dir.GetFiles("*", SearchOption.AllDirectories))
+                        {
+                            if ((file.Attributes & FileAttributes.ReadOnly) == FileAttributes.ReadOnly)
+                            {
+                                file.Attributes &= ~FileAttributes.ReadOnly;
+                            }
+                        }
 
-            watcher.Deleted += OnDeleted;
 
+                        dir.Delete(recursive: true);
 
-            if (!File.Exists(filePath))
-                tcs.TrySetResult(true);
+                        return true;
+                    }
 
-            try
-            {
-                return await tcs.Task.WaitAsync(cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                return !File.Exists(filePath); // Fallback: vielleicht ist sie doch weg
-            }
-            finally
-            {
-                watcher.Deleted -= OnDeleted;
-            }
+                    catch (IOException)
+                    {
+
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+
+                    }
+                    catch (Exception)
+                    {
+
+                    }
+
+                    await Task.Delay(250);
+                }
+
+                return !Directory.Exists(path);
+            });
         }
         #endregion
     }

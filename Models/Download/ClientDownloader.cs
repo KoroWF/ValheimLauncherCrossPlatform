@@ -2,16 +2,14 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Avalonia.Threading;
 using HtmlAgilityPack;
-using SharpCompress.Archives;
-using SharpCompress.Common;
 using ValheimLauncher2.Models.PerformanceGame;
-using ValheimLauncher2.Models.Utils;
 
 namespace ValheimLauncher2.Models.Download
 {
@@ -173,10 +171,7 @@ namespace ValheimLauncher2.Models.Download
                 string zipFilePath = Path.Combine(installPath, "ValheimWithBepInEx.zip");
                 if (File.Exists(zipFilePath))
                 {
-                    bool deletedConfirmed = await ModDownloader.WaitForFileDeletionAsync(
-                     zipFilePath,
-                     TimeSpan.FromSeconds(10)
-                 );
+                    bool deletedConfirmed = await ModDownloader.WaitForFileDeletionAsync(zipFilePath, TimeSpan.FromSeconds(10));
 
 
                     if (!deletedConfirmed)
@@ -343,28 +338,57 @@ namespace ValheimLauncher2.Models.Download
         private async Task ExtractAndMoveZip(string zipFilePath)
         {
             _updateStatus("Extrahiere Spieldateien...");
-            string tempDir = Path.Combine(Path.GetDirectoryName(zipFilePath), "ValheimWithBepInExTemp");
+            string parentDir = Path.GetDirectoryName(zipFilePath)!;
+            string tempDir = Path.Combine(parentDir, "ValheimWithBepInExTemp");
+
+            // Zielverzeichnis ist der Ordner, in den die Dateien am Ende verschoben werden
+            string targetDir = parentDir;
+
             try
             {
-                Directory.CreateDirectory(tempDir);
-                using (var archive = ArchiveFactory.Open(zipFilePath))
+                // 1. Vorbereitung und Entpacken
+                if (Directory.Exists(tempDir))
                 {
-                    foreach (var entry in archive.Entries.Where(entry => !entry.IsDirectory))
+                    await ModDownloader.ForceDeleteDirectoryAsync(tempDir);
+                }
+                Directory.CreateDirectory(tempDir);
+
+                // Ersetzt: using (var archive = ArchiveFactory.Open(zipFilePath))
+                using (var archive = ZipFile.OpenRead(zipFilePath))
+                {
+                    foreach (var entry in archive.Entries)
                     {
-                        entry.WriteToDirectory(tempDir, new ExtractionOptions { ExtractFullPath = true, Overwrite = true });
+                        // Entspricht SharpCompress: entry => !entry.IsDirectory
+                        // Wir überspringen leere Einträge (oft Ordner) und Dateinamen-Endungen wie '/' oder '\'
+                        if (string.IsNullOrEmpty(entry.Name) || entry.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        string destinationPath = Path.Combine(tempDir, entry.FullName.Replace('/', Path.DirectorySeparatorChar));
+
+                        // Erstelle das Zielverzeichnis für die Datei, falls es noch nicht existiert
+                        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+
+                        // Ersetzt: entry.WriteToDirectory(...)
+                        // Standard .NET Entpacken
+                        entry.ExtractToFile(destinationPath, overwrite: true);
                     }
                 }
+
+                // 2. Verschieben und Aufräumen (Bleibt unverändert)
                 _updateStatus("Verschiebe extrahierte Daten...");
-                MergeDirectory(tempDir, Path.GetDirectoryName(zipFilePath));
+
+                // Hier sollte die MergeDirectory-Methode die Dateien von tempDir nach targetDir (parentDir) verschieben
+                MergeDirectory(tempDir, targetDir);
+
                 _updateStatus("Räume auf...");
-                Directory.Delete(tempDir, recursive: true);
 
-                bool deletedConfirmed = await ModDownloader.WaitForFileDeletionAsync(
-                    zipFilePath,
-                    TimeSpan.FromSeconds(10)
+                // Löschen des temporären Ordners
+                await ModDownloader.ForceDeleteDirectoryAsync(tempDir);
 
-                );
-
+                // Löschen der ZIP-Datei mit der Wartefunktion
+                bool deletedConfirmed = await ModDownloader.WaitForFileDeletionAsync(zipFilePath, TimeSpan.FromSeconds(10));
 
                 if (!deletedConfirmed)
                 {
