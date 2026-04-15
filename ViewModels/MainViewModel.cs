@@ -1,14 +1,16 @@
-﻿using System;
+﻿using Avalonia.Controls;
+using Avalonia.Platform.Storage;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using Newtonsoft.Json;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
-using Avalonia.Controls;
-using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
-using Newtonsoft.Json;
 using ValheimCrossPlatformLauncher;
 using ValheimLauncher2.Models.Download;
 using ValheimLauncher2.Models.Settings;
@@ -127,7 +129,6 @@ namespace ValheimLauncher2.ViewModels
                     {
                         StatusText = ex.Message;
                     });
-                    Debug.WriteLine($"Error in initial modpack check: {ex.Message}");
                 }
             });
         
@@ -143,8 +144,12 @@ namespace ValheimLauncher2.ViewModels
             {
                 if (File.Exists(settingsFilePath))
                 {
-                    string json = File.ReadAllText(settingsFilePath);
-                    currentSettings = JsonConvert.DeserializeObject<LauncherSettings>(json) ?? new LauncherSettings();
+                    using (var stream = new FileStream(settingsFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    using (var reader = new StreamReader(stream))
+                    {
+                        string json = reader.ReadToEnd();
+                        currentSettings = JsonConvert.DeserializeObject<LauncherSettings>(json) ?? new LauncherSettings();
+                    }
                 }
                 else
                 {
@@ -161,6 +166,18 @@ namespace ValheimLauncher2.ViewModels
             VulkanEnabled = currentSettings.VulkanEnabled;
             LocalModpackVersion = "v. " + (currentSettings.Modpack?.CurrentLocalVersion ?? "-");
             InstallPathText = currentSettings.ValheimInstallPath;
+
+            Checkstatus();
+
+            if (!IsGameInstalled)
+            {
+                string defaultPath = PlatformUtils.GetDefaultSystemPath();
+                currentSettings.ValheimInstallPath = defaultPath;
+                InstallPathText = defaultPath;
+
+                SaveSettings();
+                StatusText = "Neu Installation erforderlich.";
+            }
         }
 
         /// <summary>
@@ -171,17 +188,16 @@ namespace ValheimLauncher2.ViewModels
             currentSettings.VulkanEnabled = VulkanEnabled;
             try
             {
-                using (var writer = new StreamWriter(settingsFilePath, false))
+                using (var stream = new FileStream(settingsFilePath, FileMode.Create, FileAccess.Write, FileShare.Read))
+                using (var writer = new StreamWriter(stream))
                 {
                     string json = JsonConvert.SerializeObject(currentSettings, Formatting.Indented);
                     writer.Write(json);
-                    writer.Flush();
                 }
             }
             catch (Exception ex)
             {
                 StatusText = "Fehler beim Speichern der Einstellungen.";
-                Debug.WriteLine($"Error saving settings: {ex.Message}");
             }
         }
 
@@ -404,11 +420,9 @@ namespace ValheimLauncher2.ViewModels
                 };
                 process.Start();
                 process.WaitForExit();
-                Debug.WriteLine($"Set execute permission (u+x) on {filePath}");
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Could not set execute permission on {filePath}: {ex.Message}");
             }
         }
 
@@ -423,62 +437,87 @@ namespace ValheimLauncher2.ViewModels
             var message = "Wählen Sie im Folgenden das Zielverzeichnis, in dem der Ordner 'VImmerndar' erstellt werden soll.";
             var result = await ConfirmDialog.Show(_parentWindow, "Installationshinweis", message);
 
-            if (result == ConfirmDialog.DialogResult.Yes)
-            {
-
-                string? initialDirectory = PlatformUtils.GetDefaultSystemPath();
-
-                var dialog = new OpenFolderDialog
-                {
-                    Title = "Wähle einen neuen Installationsordner",
-                    Directory = initialDirectory
-                };
-                var newPath = await dialog.ShowAsync(_parentWindow);
-
-                if (string.IsNullOrEmpty(newPath))
-                {
-                    StatusText = "Installation abgebrochen.";
-                    IsBusy = false;
-                    return;
-                }
-
-                IsBusy = true;
-                try
-                {
-
-                    currentSettings.ValheimInstallPath = Path.Combine(newPath, "VImmerndar");
-                    InstallPathText = Path.Combine(newPath, "VImmerndar");
-
-                    IsGameInstalled = false;
-
-                    if (!Directory.Exists(currentSettings.ValheimInstallPath))
-                    {
-                        Directory.CreateDirectory(currentSettings.ValheimInstallPath);
-                    }
-
-                    await _clientDownloader.InstallGameAsync(currentSettings.ValheimInstallPath);
-                    PlatformUtils.ModifyBootConfig(currentSettings.ValheimInstallPath);
-                    (string? onlineVersion, bool needsUpdate) = await _modDownloader.CheckForUpdatesAsync();
-                    if (onlineVersion != null)
-                    {
-                        OnlineModpackVersion = "v. " + onlineVersion;
-                    }
-                    await _modDownloader.ForceUpdateModpackAsync();
-                    LocalModpackVersion = "v. " + (currentSettings.Modpack?.CurrentLocalVersion ?? "-");
-                    StatusText = "Installation abgeschlossen!";
-                    SaveSettings();
-                    Checkstatus();
-                }
-                finally
-                {
-
-                    IsBusy = false;
-                }
-            }
-            else
+            if (result != ConfirmDialog.DialogResult.Yes)
             {
                 IsBusy = false;
                 return;
+            }
+
+            string? initialDirectory = PlatformUtils.GetDefaultSystemPath();
+            var topLevel = TopLevel.GetTopLevel(_parentWindow);
+
+            if (topLevel?.StorageProvider == null)
+            {
+                StatusText = "Fehler: Kann Ordner-Dialog nicht öffnen.";
+                IsBusy = false;
+                return;
+            }
+
+            var options = new FolderPickerOpenOptions
+            {
+                Title = "Wähle einen neuen Installationsordner",
+                AllowMultiple = false,
+                SuggestedStartLocation = string.IsNullOrEmpty(initialDirectory)
+                    ? null
+                    : await topLevel.StorageProvider.TryGetFolderFromPathAsync(initialDirectory)
+            };
+
+            var selectedFolders = await topLevel.StorageProvider.OpenFolderPickerAsync(options);
+            string? newPath = selectedFolders.FirstOrDefault()?.TryGetLocalPath();
+
+            if (string.IsNullOrEmpty(newPath))
+            {
+                StatusText = "Installation abgebrochen.";
+                IsBusy = false;
+                return;
+            }
+
+            try
+            {
+                currentSettings.ValheimInstallPath = Path.Combine(newPath, "VImmerndar");
+                InstallPathText = currentSettings.ValheimInstallPath;
+
+                Checkstatus();
+
+                if (IsGameInstalled)
+                {
+                    StatusText = "Spiel im gewählten Ordner bereits gefunden. Modpack-Update wird geprüft...";
+
+                    SaveSettings();
+
+                    await CheckAndUpdateModpackAsync();
+                    return; 
+                }
+
+                if (!Directory.Exists(currentSettings.ValheimInstallPath))
+                {
+                    Directory.CreateDirectory(currentSettings.ValheimInstallPath);
+                }
+
+                await _clientDownloader.InstallGameAsync(currentSettings.ValheimInstallPath);
+                PlatformUtils.ModifyBootConfig(currentSettings.ValheimInstallPath);
+
+                (string? onlineVersion, _) = await _modDownloader.CheckForUpdatesAsync();
+                if (onlineVersion != null)
+                {
+                    OnlineModpackVersion = "v. " + onlineVersion;
+                }
+
+                await _modDownloader.ForceUpdateModpackAsync();
+
+                LocalModpackVersion = "v. " + (currentSettings.Modpack?.CurrentLocalVersion ?? "-");
+                StatusText = "Installation abgeschlossen!";
+
+                SaveSettings();
+                Checkstatus();
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Fehler: {ex.Message}";
+            }
+            finally
+            {
+                IsBusy = false;
             }
         }
 
@@ -553,7 +592,7 @@ namespace ValheimLauncher2.ViewModels
             {
                 Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
                 {
-                    StatusText = "Auto-Update übersprungen: Spielpfad nicht eingerichtet oder Installation unvollständig.";
+                    StatusText = "Auto-Update übersprungen. Installation fehlerhaft?";
                 });
                 return;
             }
@@ -586,14 +625,28 @@ namespace ValheimLauncher2.ViewModels
 
             string? initialDirectory = PlatformUtils.GetDefaultSystemPath();
 
-            var dialog = new OpenFolderDialog
+            var topLevel = TopLevel.GetTopLevel(_parentWindow);
+            if (topLevel?.StorageProvider == null)
+            {
+                StatusText = "Fehler: Kann Ordner-Dialog nicht öffnen (StorageProvider nicht verfügbar).";
+                IsBusy = false;
+                return;
+            }
+
+            var options = new FolderPickerOpenOptions
             {
                 Title = "Wähle einen neuen Installationsordner",
-                Directory = initialDirectory
+                AllowMultiple = false,
+                SuggestedStartLocation = string.IsNullOrEmpty(initialDirectory)
+                    ? null
+                    : await topLevel.StorageProvider.TryGetFolderFromPathAsync(initialDirectory)
             };
 
+            var selectedFolders = await topLevel.StorageProvider.OpenFolderPickerAsync(options);
+
+            string? newPath = selectedFolders.FirstOrDefault()?.TryGetLocalPath();   // Sicherer als .Path.LocalPath
+
             string oldPath = currentSettings.ValheimInstallPath;
-            var newPath = await dialog.ShowAsync(_parentWindow);
 
             if (string.IsNullOrEmpty(newPath))
             {

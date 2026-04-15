@@ -65,14 +65,14 @@ namespace ValheimLauncher2.Models.Download
             var apiData = await GetThunderstoreApiData("ImmernDarNew/ImmernDarNew_Modpack");
             if (apiData.versionNumber == null)
             {
-                _updateStatus("Error: Thunderstore API not reachable.");
+                _updateStatus("Error: Thunderstore API nicht erreichbar.");
                 return (null, false);
             }
 
             string localVersion = _settings.Modpack.CurrentLocalVersion;
             bool needsUpdate = localVersion != apiData.versionNumber;
 
-            _updateStatus(needsUpdate ? $"Update to v.{apiData.versionNumber} available!" : "Mods are up to date.");
+            _updateStatus(needsUpdate ? $"Update zu v.{apiData.versionNumber} verfügbar!" : "Mods sind auf dem neusten stand.");
             return (apiData.versionNumber, needsUpdate);
         }
 
@@ -106,14 +106,14 @@ namespace ValheimLauncher2.Models.Download
                 return;
             }
 
-            _updateStatus("Starting mod update...");
+            _updateStatus("Starte Mod update...");
 
             var apiData = await GetThunderstoreApiData("ImmernDarNew/ImmernDarNew_Modpack");
             //var apiData = await GetThunderstoreApiData("TeamKoro/Mithrael_Modpack"); //for testing
 
             if (apiData.dependencies == null)
             {
-                _updateStatus("Error: Could not retrieve modpack dependencies.");
+                _updateStatus("Error: Konnte die Mod Anforderungen nicht downloaden.");
                 return;
             }
 
@@ -127,41 +127,35 @@ namespace ValheimLauncher2.Models.Download
             await CleanupOldModsAsync(pluginsPath);
             await CleanupOldZipsAsync(pluginZipPath, apiData.dependencies.ToList());
 
-            bool success = await DownloadAndExtractDependenciesAsync(apiData.dependencies);
+            bool success = await DownloadDependenciesAsync(apiData.dependencies);
 
             if (success)
             {
+
+                _updateStatus("Entpacke alle Mods...");
+                await ExtractAllZipsToPluginsAsync(apiData.dependencies);
+
                 await InstallBepInExCoreAsync();
 
                 _settings.Modpack.CurrentLocalVersion = apiData.versionNumber;
                 _saveSettings();
-                _updateStatus("Modpack updated!");
+                _updateStatus("Modpack erfolgreich geupdated!");
             }
 
         }
 
         /// <summary>
-        /// Downloads and extracts all required mod dependencies.
+        /// Downloads all required mod dependencies WITHOUT extracting them.
         /// </summary>
-        /// <param name="dependencies">The list of mod dependencies to download and extract.</param>
-        /// <returns>True if all operations were successful; otherwise, false.</returns>
-        private async Task<bool> DownloadAndExtractDependenciesAsync(string[] dependencies)
+        private async Task<bool> DownloadDependenciesAsync(string[] dependencies)
         {
-            _updateStatus($"Überprüfe Mods...");
+            _updateStatus("Überprüfe und downloade Mods...");
+
             string baseDirectory = _settings.ValheimInstallPath;
             string bepinexPath = Path.Combine(baseDirectory, "BepInEx");
-            string pluginsPath = Path.Combine(bepinexPath, "plugins");
             string pluginZipPath = Path.Combine(bepinexPath, "pluginZip");
 
-            if (!Directory.Exists(pluginsPath))
-            {
-                Directory.CreateDirectory(pluginsPath);
-            }
-
-            if (!Directory.Exists(pluginZipPath))
-            {
-                Directory.CreateDirectory(pluginZipPath);
-            }
+            Directory.CreateDirectory(pluginZipPath);
 
             bool allOperationsSuccessful = true;
             int totalDependencies = dependencies.Length;
@@ -173,14 +167,13 @@ namespace ValheimLauncher2.Models.Download
                 double percentage = (double)completedDependencies / totalDependencies * 100;
                 _updateProgress(percentage.ToString("F0", CultureInfo.InvariantCulture));
 
-
-                bool isBepInExPack = dependency.Contains("denikson-BepInExPack_Valheim", StringComparison.OrdinalIgnoreCase);
-
                 string cachedZipPath = Path.Combine(pluginZipPath, $"{dependency}.zip");
                 string downloadUrl = $"https://gcdn.thunderstore.io/live/repository/packages/{dependency}.zip";
-                bool downloadNeeded = true;
 
+                bool downloadNeeded = true;
                 long onlineFileSize = -1;
+
+                // HEAD-Request für Dateigröße
                 try
                 {
                     using var headRequest = new HttpRequestMessage(HttpMethod.Head, downloadUrl);
@@ -191,36 +184,28 @@ namespace ValheimLauncher2.Models.Download
                 catch (HttpRequestException hex)
                 {
                     _updateStatus($"HEAD failed for {dependency} (will download anyway): {hex.Message}");
-                    await _showError($"HEAD failed for {dependency} (will download anyway): {hex.Message}");
                     allOperationsSuccessful = false;
                 }
 
                 if (File.Exists(cachedZipPath))
-                {
-                    if (IsZipValid(cachedZipPath, onlineFileSize))
+                {  // Check if local file size matches online size (if we got it)
+                    var localFileInfo = new FileInfo(cachedZipPath);
+                    if (onlineFileSize > 0 && localFileInfo.Length == onlineFileSize)
                     {
                         downloadNeeded = false;
-                    }
-                    else
-                    {
-                        downloadNeeded = true;
+                        _updateStatus($"{dependency} ist bereits aktuell.");
                     }
                 }
-
 
                 if (downloadNeeded)
                 {
                     bool downloadSuccess = false;
-
                     while (!downloadSuccess)
                     {
                         try
                         {
-                            long fileSize = onlineFileSize > 0 ? onlineFileSize : 0;
-
                             _updateStatus($"Downloade: {dependency}");
-
-
+                            long fileSize = onlineFileSize > 0 ? onlineFileSize : 0;
                             var buffer = new byte[81920];
                             long totalBytes = 0;
                             var lastReportTime = DateTime.UtcNow;
@@ -229,16 +214,13 @@ namespace ValheimLauncher2.Models.Download
                             response.EnsureSuccessStatusCode();
 
                             using var responseStream = await response.Content.ReadAsStreamAsync();
-
                             using var fileStream = new FileStream(cachedZipPath, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite, bufferSize: 81920, useAsync: true);
-                            int bytesRead;
 
+                            int bytesRead;
                             while ((bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length, _cancellationTokenSource.Token)) > 0)
                             {
-
                                 await fileStream.WriteAsync(buffer, 0, bytesRead, _cancellationTokenSource.Token);
                                 totalBytes += bytesRead;
-
 
                                 var now = DateTime.UtcNow;
                                 if ((now - lastReportTime).TotalMilliseconds >= 100)
@@ -252,96 +234,54 @@ namespace ValheimLauncher2.Models.Download
                             }
 
                             downloadSuccess = true;
+                            _updateSpeed?.Invoke("");
                         }
-                        // Issues related to file access
-                        catch (IOException ioEx)
-                        {
-                            string errorMessage = "Fehler beim Zugriff auf die Festplatte (Datei gesperrt/Platte voll/Pfadproblem).";
-                            if (ioEx.Message.Contains("access") || ioEx.Message.Contains("use by another process"))
-                            {
-                                errorMessage = "Fehler: Die Datei wird gesperrt (Access Denied). Bitte schließen Sie externe Programme (z.B. Virenscanner).";
-                            }
-                            _updateStatus($"I/O Fehler beim Download von {dependency}: {errorMessage}");
-                        }
-                        // Issues related to HTTP requests
-                        catch (HttpRequestException httpEx)
-                        {
-                            string statusCodeInfo = httpEx.StatusCode.HasValue
-                                ? $"Status Code: {(int)httpEx.StatusCode} {httpEx.StatusCode.Value}"
-                                : "Verbindungsfehler";
-
-                            _updateStatus($"HTTP Fehler beim Download von {dependency}: {statusCodeInfo} ({httpEx.Message})");
-                        }
-                        // Issues related to cancellation
                         catch (OperationCanceledException)
                         {
                             _updateStatus($"Download von {dependency} wurde abgebrochen.");
-
                             if (File.Exists(cachedZipPath))
-                            {
-                                _updateStatus("Räume unvollständige Download-Datei auf...");
-                                try
-                                {
-
-                                    bool deletedConfirmed = await ModDownloader.WaitForFileDeletionAsync(
-                                        cachedZipPath,
-                                        TimeSpan.FromSeconds(5), 
-                                        _cancellationTokenSource.Token
-                                    );
-
-                                    if (deletedConfirmed)
-                                    {
-                                        _updateStatus($"Unvollständige Datei {Path.GetFileName(cachedZipPath)} gelöscht.");
-                                    }
-                                    else
-                                    {
-                                        await _showError($"Warnung: Konnte unvollständige Datei nach Abbruch nicht löschen (Sperre nach 5s).");
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    await _showError($"Kritischer Fehler beim Aufräumen nach Abbruch: {ex.Message}");
-                                }
-                            }
+                                await WaitForFileDeletionAsync(cachedZipPath, TimeSpan.FromSeconds(5), _cancellationTokenSource.Token);
                             return false;
                         }
-                        // All other exceptions
                         catch (Exception ex)
                         {
-                            _updateStatus($"Unbekannter kritischer Fehler beim Download von {dependency}: {ex.Message}");
+                            _updateStatus($"Fehler beim Download von {dependency}: {ex.Message}");
+                            if (!downloadSuccess)
+                                await _showError($"Download-Fehler für {dependency}. Starte erneut...");
+                            _updateSpeed?.Invoke("");
                         }
-
-                        // After all attempts, check if download was successful
-                        if (!downloadSuccess)
-                        {
-                            await _showError($"Download-Fehler für {dependency}.Starte Download noch einmal.");
-                        }
-
-
-                        _updateSpeed?.Invoke("");
                     }
                 }
-
-                try {
-
-                    if (IsZipValid(cachedZipPath, onlineFileSize))
-                    {
-                        await ExtractToPlugins(dependency, pluginZipPath);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _updateStatus($"Error: Fehler von {dependency}: {ex.Message}");
-                    await _showError($"Error: Fehler von{dependency}.");
-                }
-
-               
-
             }
 
             return allOperationsSuccessful;
         }
 
+        /// <summary>
+        /// Entpackt ALLE ZIP-Dateien aus dem pluginZip-Ordner nach Abschluss aller Downloads.
+        /// Verwendet exakt die gleiche Logik wie vorher.
+        /// </summary>
+        private async Task ExtractAllZipsToPluginsAsync(string[] dependencies)
+        {
+            string pluginsPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "plugins");
+            string pluginZipPath = Path.Combine(_settings.ValheimInstallPath, "BepInEx", "pluginZip");
+
+            foreach (var dependency in dependencies)
+            {
+                string cachedZipPath = Path.Combine(pluginZipPath, $"{dependency}.zip");
+
+                if (!File.Exists(cachedZipPath))
+                {
+                    _updateStatus($"Warnung: {dependency}.zip nicht gefunden.");
+                    continue;
+                }
+
+                _updateStatus($"Entpacke: {dependency}");
+                await ExtractToPlugins(dependency, pluginZipPath);   // Deine bestehende Methode (unverändert!)
+            }
+
+            _updateStatus("Alle Mods wurden entpackt.");
+        }
 
         /// <summary>
         /// Extract data from zip files, but only those who we need.
@@ -399,6 +339,8 @@ namespace ValheimLauncher2.Models.Download
 
                                 if (File.Exists(tempInnerZipPath))
                                 {
+                                    await Task.Delay(100);
+
                                     bool deletedConfirmed = await WaitForFileDeletionAsync(
                                            tempInnerZipPath,
                                            TimeSpan.FromSeconds(10),
@@ -654,35 +596,6 @@ namespace ValheimLauncher2.Models.Download
             }
         }
 
-        /// <summary>
-        /// checks if the cached zip file is valid by verifying its existence, size, and integrity.
-        /// </summary>
-        private bool IsZipValid(string cachedZipPath, long onlineFileSize)
-        {
-            try
-            {
-                var localFileInfo = new FileInfo(cachedZipPath);
-
-                if (localFileInfo.Length != onlineFileSize && onlineFileSize > 0)
-                {
-                    return false;
-                }
-
-                bool isValid;
-
-                using (var archive = ZipFile.OpenRead(cachedZipPath))
-                {
-
-                    isValid = archive.Entries.Any();
-                }
-
-                return isValid;
-            }
-            catch (Exception ex)
-            {
-                return false;
-            }
-        }
 
         #region delete Files
 

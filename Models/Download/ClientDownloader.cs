@@ -210,7 +210,7 @@ namespace ValheimLauncher2.Models.Download
         /// <returns>The total size in bytes, or0 if unavailable.</returns>
         private async Task<long> GetTotalSizeFromServer(HttpClient httpClient)
         {
-            string requestUri = "https://www.immerndar.de/gesamtgroesse.txt";
+            string requestUri = "https://www.immerndar.de/ValheimWithBepInEx/gesamtgroesse.txt";
             try
             {
                 string sizeString = await httpClient.GetStringAsync(requestUri);
