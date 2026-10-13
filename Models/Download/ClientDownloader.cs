@@ -145,15 +145,15 @@ namespace ValheimLauncher2.Models.Download
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                serverUri = "https://www.immerndar.de/ValheimWithBepInEx/Windows/";
+                serverUri = "http://37.114.34.14/ValheimWithBepInEx/Windows/";
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
-                serverUri = "https://www.immerndar.de/ValheimWithBepInEx/Linux/";
+                serverUri = "http://37.114.34.14/ValheimWithBepInEx/Linux/";
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                serverUri = "https://www.immerndar.de/ValheimWithBepInEx/Mac/";
+                serverUri = "http://37.114.34.14/ValheimWithBepInEx/Mac/";
             }
 
             if (string.IsNullOrEmpty(serverUri))
@@ -210,7 +210,7 @@ namespace ValheimLauncher2.Models.Download
         /// <returns>The total size in bytes, or0 if unavailable.</returns>
         private async Task<long> GetTotalSizeFromServer(HttpClient httpClient)
         {
-            string requestUri = "https://www.immerndar.de/ValheimWithBepInEx/gesamtgroesse.txt";
+            string requestUri = "http://37.114.34.14/ValheimWithBepInEx/gesamtgroesse.txt";
             try
             {
                 string sizeString = await httpClient.GetStringAsync(requestUri);

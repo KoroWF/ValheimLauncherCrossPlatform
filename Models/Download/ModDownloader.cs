@@ -30,6 +30,8 @@ namespace ValheimLauncher2.Models.Download
         private readonly Func<string, Task> _showError;
         private Window _parentWindow;
 
+        private JArray? _thunderstorePackagesCache;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="ModDownloader"/> class.
         /// </summary>
@@ -62,7 +64,7 @@ namespace ValheimLauncher2.Models.Download
         public async Task<(string? onlineVersion, bool needsUpdate)> CheckForUpdatesAsync()
         {
             _updateStatus("Checke mod version...");
-            var apiData = await GetThunderstoreApiData("ImmernDarNew/ImmernDarNew_Modpack");
+            var apiData = await GetHexiumApiData("TeamKoro/ImmerndarNew");
             if (apiData.versionNumber == null)
             {
                 _updateStatus("Error: Thunderstore API nicht erreichbar.");
@@ -108,8 +110,9 @@ namespace ValheimLauncher2.Models.Download
 
             _updateStatus("Starte Mod update...");
 
-            var apiData = await GetThunderstoreApiData("ImmernDarNew/ImmernDarNew_Modpack");
+            var apiData = await GetHexiumApiData("TeamKoro/ImmerndarNew");
             //var apiData = await GetThunderstoreApiData("TeamKoro/Mithrael_Modpack"); //for testing
+            //var apiData = await GetThunderstoreApiData("ImmernDarNew/ImmernDarNew_Modpack");
 
             if (apiData.dependencies == null)
             {
@@ -139,9 +142,40 @@ namespace ValheimLauncher2.Models.Download
 
                 _settings.Modpack.CurrentLocalVersion = apiData.versionNumber;
                 _saveSettings();
-                _updateStatus("Modpack erfolgreich geupdated!");
+                _updateStatus("Modpack erfolgreich geupdated zur version: " + apiData.versionNumber);
+            }
+            else
+            {
+                _updateStatus("Modpack Update fehlgeschlagen!");
             }
 
+        }
+
+
+        // Dependency-String: "Author-ModName-1.2.3"
+        private async Task<string?> GetHexiumDownloadUrlAsync(string dependency)
+        {
+            try
+            {
+                // Version vom Ende abschneiden: Author-ModName-1.2.3 → Author/ModName/1.2.3
+                var parts = dependency.Split('-');
+                if (parts.Length < 3) return null;
+
+                string version = parts[^1];                    // letzte Stelle = Version
+                string name = parts[^2];                      // vorletzte = ModName
+                string author = string.Join("-", parts.Take(parts.Length - 2)); // Rest = Author (kann Bindestriche haben)
+
+                string url = $"https://valheim.hexium.gg/api/experimental/package/{author}/{name}/{version}/";
+                string json = await _httpClient.GetStringAsync(url);
+                JObject data = JObject.Parse(json);
+
+                return data.SelectToken("download_url")?.ToString();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Konnte Download-URL für {dependency} nicht holen: {ex.Message}");
+                return null;
+            }
         }
 
         /// <summary>
@@ -168,7 +202,55 @@ namespace ValheimLauncher2.Models.Download
                 _updateProgress(percentage.ToString("F0", CultureInfo.InvariantCulture));
 
                 string cachedZipPath = Path.Combine(pluginZipPath, $"{dependency}.zip");
-                string downloadUrl = $"https://gcdn.thunderstore.io/live/repository/packages/{dependency}.zip";
+
+
+            string? downloadUrl = null;
+
+                // 1. Zuerst Hexium versuchen
+                try
+                {
+                    downloadUrl = await GetHexiumDownloadUrlAsync(dependency);
+                }
+                catch (Exception ex)
+                {
+                    _updateStatus(
+                        $"Hexium-Fehler für {dependency}: {ex.Message}");
+                }
+
+                // 2. Wenn Hexium keine URL liefert, Thunderstore versuchen
+                if (!string.IsNullOrWhiteSpace(downloadUrl))
+                {
+                    _updateStatus($"Download-Quelle: Hexium – {dependency}");
+                }
+                else
+                {
+                    _updateStatus(
+                        $"Hexium nicht verfügbar. Versuche Thunderstore: {dependency}");
+
+                    try
+                    {
+                        downloadUrl = await GetThunderstoreDownloadUrlAsync(dependency);
+                    }
+                    catch (Exception ex)
+                    {
+                        _updateStatus(
+                            $"Thunderstore-Fehler für {dependency}: {ex.Message}");
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(downloadUrl))
+                    {
+                        _updateStatus($"Download-Quelle: Thunderstore – {dependency}");
+                    }
+                    else
+                    {
+                        _updateStatus(
+                            $"Fehler: Mod auf keiner Quelle gefunden: {dependency}");
+
+                        allOperationsSuccessful = false;
+                        continue;
+                    }
+                }
+
 
                 bool downloadNeeded = true;
                 long onlineFileSize = -1;
@@ -181,10 +263,15 @@ namespace ValheimLauncher2.Models.Download
                     headResponse.EnsureSuccessStatusCode();
                     onlineFileSize = headResponse.Content.Headers.ContentLength ?? -1;
                 }
-                catch (HttpRequestException hex)
-                {
-                    _updateStatus($"HEAD failed for {dependency} (will download anyway): {hex.Message}");
-                    allOperationsSuccessful = false;
+            catch (HttpRequestException hex)
+{
+                    _updateStatus(
+                        $"HEAD fehlgeschlagen für {dependency} " +
+                        $"(Download wird trotzdem versucht): {hex.Message}");
+
+                    // Wichtig:
+                    // allOperationsSuccessful hier NICHT auf false setzen.
+                    // Der eigentliche Download wird anschließend versucht.
                 }
 
                 if (File.Exists(cachedZipPath))
@@ -575,11 +662,12 @@ namespace ValheimLauncher2.Models.Download
         /// </summary>
         /// <param name="modpackId">The modpack identifier.</param>
         /// <returns>A tuple containing the download URL, version number, and dependencies.</returns>
-        private async Task<(string? downloadUrl, string? versionNumber, string[]? dependencies)> GetThunderstoreApiData(string modpackId)
+        private async Task<(string? downloadUrl, string? versionNumber, string[]? dependencies)> GetHexiumApiData(string modpackId)
         {
             try
             {
-                string url = $"https://thunderstore.io/api/experimental/package/{modpackId}/";
+                // Hexium statt Thunderstore
+                string url = $"https://valheim.hexium.gg/api/experimental/package/{modpackId}/";
                 string jsonResponse = await _httpClient.GetStringAsync(url);
                 JObject data = JObject.Parse(jsonResponse);
 
@@ -591,8 +679,89 @@ namespace ValheimLauncher2.Models.Download
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error fetching Thunderstore API data: {ex.Message}");
+                Debug.WriteLine($"Error fetching Hexium API data: {ex.Message}");
                 return (null, null, null);
+            }
+        }
+
+
+
+        private async Task<string?> GetThunderstoreDownloadUrlAsync(string dependency)
+        {
+            try
+            {
+                // Paketname und Version trennen, z. B. Author-ModName-1.2.3
+                int lastDash = dependency.LastIndexOf('-');
+
+                if (lastDash <= 0 || lastDash == dependency.Length - 1)
+                    return null;
+
+                string packageFullName = dependency.Substring(0, lastDash);
+                string requestedVersion = dependency.Substring(lastDash + 1);
+
+                // Thunderstore-Paketliste nur einmal laden und parsen.
+                if (_thunderstorePackagesCache == null)
+                {
+                    const string apiUrl =
+                        "https://thunderstore.io/c/valheim/api/v1/package/";
+
+                    _updateStatus("Lade Thunderstore-Paketliste...");
+
+                    string json = await _httpClient.GetStringAsync(apiUrl);
+                    _thunderstorePackagesCache = JArray.Parse(json);
+                }
+
+                // Im bereits geladenen JSON nach Paket und Version suchen.
+                foreach (JToken package in _thunderstorePackagesCache)
+                {
+                    string? fullName = package["full_name"]?.ToString();
+
+                    if (!string.Equals(
+                            fullName,
+                            packageFullName,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (package["versions"] is not JArray versions)
+                        continue;
+
+                    foreach (JToken version in versions)
+                    {
+                        string? versionNumber =
+                            version["version_number"]?.ToString();
+
+                        if (!string.Equals(
+                                versionNumber,
+                                requestedVersion,
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        string? downloadUrl =
+                            version["download_url"]?.ToString();
+
+                        if (!string.IsNullOrWhiteSpace(downloadUrl))
+                            return downloadUrl;
+                    }
+
+                    // Paket existiert, aber die gewünschte Version fehlt.
+                    break;
+                }
+
+                Debug.WriteLine(
+                    $"Thunderstore: Paket oder Version nicht gefunden: {dependency}");
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(
+                    $"Thunderstore-Download-URL für {dependency} fehlgeschlagen: {ex.Message}");
+
+                return null;
             }
         }
 
